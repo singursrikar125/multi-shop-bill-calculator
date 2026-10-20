@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Multi-Shop Bill Calculator</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css">
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.min.js"></script>
+<style>
+:root{--bg:#f4f6f8;--c:#fff;--t:#111827;--m:#6b7280;--b:#d1d5db;--p:#1d4ed8;--bad:#dc2626;--ok:#15803d}
+@media(prefers-color-scheme:dark){:root{--bg:#0f172a;--c:#1e293b;--t:#e5e7eb;--m:#94a3b8;--b:#475569;--p:#3b82f6;--bad:#f87171;--ok:#4ade80}}
+html{color-scheme:light dark}
+body{background:var(--bg);color:var(--t);font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;overflow-x:hidden}
+.card{background:var(--c);border:1px solid var(--b);border-radius:12px;padding:12px;margin:10px 0}
+input,select,textarea{background:var(--bg);color:var(--t);border:1px solid var(--b);border-radius:8px;padding:8px 10px;min-height:44px;width:100%;font-size:16px;margin:3px 0}
+input[type=checkbox]{width:22px;min-height:22px}
+.btn{background:var(--p);color:#fff;border-radius:8px;min-height:44px;padding:0 12px;font-weight:600}
+.btn.g{background:transparent;color:var(--t);border:1px solid var(--b)}
+.btn.r{background:var(--bad)}
+.tab{min-height:48px;font-size:13px;font-weight:600;color:var(--m);border-bottom:3px solid transparent}
+.tab.on{color:var(--p);border-color:var(--p)}
+.m{color:var(--m);font-size:12px}
+.dd{position:absolute;z-index:30;left:0;right:0;background:var(--c);border:1px solid var(--b);max-height:190px;overflow:auto;border-radius:8px}
+.dd div{padding:11px;border-bottom:1px solid var(--b)}
+.modal{position:fixed;inset:0;background:#000b;z-index:2000;display:flex;align-items:center;justify-content:center;padding:12px}
+.modal>div{background:var(--c);border-radius:12px;padding:14px;width:420px;max-width:100%;max-height:92vh;overflow:auto}
+.low{color:var(--bad);font-weight:700}
+#toast{position:fixed;left:8px;right:8px;bottom:12px;z-index:3000;color:#fff;padding:12px;border-radius:10px;display:none}
+@media print{nav,.btn,#toast,.noprint{display:none!important}body{background:#fff;color:#000}}
+</style></head>
+<body><div id="app"></div><div id="modal"></div><div id="toast"></div>
+<script>
+/* NOTE: Auth is a client-side convenience gate. Accounts live in this browser's localStorage, so they exist only on
+   this device/browser. Real cross-device login (and real security) requires a backend with server-side auth. */
+const $=i=>document.getElementById(i),esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const R=n=>'₹'+Number(n||0).toLocaleString('en-IN',{maximumFractionDigits:2}),RS=n=>'Rs. '+Number(n||0).toLocaleString('en-IN',{maximumFractionDigits:2});
+const pad=n=>String(n).padStart(2,'0'),today=()=>{const d=new Date();return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())},nowT=()=>{const d=new Date();return pad(d.getHours())+':'+pad(d.getMinutes())};
+const hm=ms=>{const m=Math.floor(ms/60000);return Math.floor(m/60)+'h '+m%60+'m'};
+const hav=(a,b,c,d)=>{const r=Math.PI/180,x=Math.sin((c-a)*r/2)**2+Math.cos(a*r)*Math.cos(c*r)*Math.sin((d-b)*r/2)**2;return 12742000*Math.asin(Math.sqrt(x))};
+const toast=(m,bad)=>{const t=$('toast');t.textContent=m;t.style.background=bad?'#b91c1c':'#15803d';t.style.display='block';clearTimeout(toast.h);toast.h=setTimeout(()=>t.style.display='none',bad?7000:3000)};
+const lsGet=(k,d)=>{try{const v=localStorage.getItem(k);return v?JSON.parse(v):d}catch(e){toast('Storage read failed: '+e.message,1);return d}};
+const lsSet=(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v));return true}catch(e){toast('Storage write failed (full or blocked): '+e.message,1);return false}};
+let U=null,tab='Bill',B=null,T=null,W=null,wl=null,map=null,tm=null,lastPos=null,D=today(),qs=null,SR=null,EXD=[],ddl=[],mode='login';
+const G=(n,d)=>lsGet(`msb.${U.id}.${n}`,d),S=(n,v)=>lsSet(`msb.${U.id}.${n}`,v);
+const DEF=['kobari kaya','match box','salt','water glass','mini jambo','jambo'];
+const cat=()=>{let c=G('catalog',null);if(!c){c={};DEF.forEach(n=>c[n]=0)}return c};
+const cfg=()=>G('cfg',{radius:150}),shops=()=>G('shops',[]),orders=()=>G('orders',{}),trips=()=>G('trips',{});
+const allBills=()=>Object.values(orders()).flat();
+const key=(n,g)=>String(n).trim().toLowerCase()+'|'+String(g).trim().toLowerCase();
+const modal=h=>{$('modal').innerHTML=`<div class="modal"><div>${h}</div></div>`},closeModal=()=>{stopScan();$('modal').innerHTML=''};
+
+/* ---------- AUTH ---------- */
+const hex=n=>Array.from(crypto.getRandomValues(new Uint8Array(n)),b=>pad(b.toString(16))).join('');
+const b64=b=>btoa(String.fromCharCode(...new Uint8Array(b))),unb=s=>Uint8Array.from(atob(s),c=>c.charCodeAt(0));
+async function hashPw(pw,salt,it){if(!(window.crypto&&crypto.subtle))throw new Error('Secure hashing needs https or localhost (Web Crypto unavailable).');
+ const k=await crypto.subtle.importKey('raw',new TextEncoder().encode(pw),'PBKDF2',false,['deriveBits']);
+ return new Uint8Array(await crypto.subtle.deriveBits({name:'PBKDF2',salt,iterations:it,hash:'SHA-256'},k,256))}
+const same=(a,b)=>{if(a.length!==b.length)return false;let d=0;for(let i=0;i<a.length;i++)d|=a[i]^b[i];return d===0};
+const users=()=>lsGet('msb.users',{}),saveUsers=u=>lsSet('msb.users',u),ITER=150000;
+function showAuth(){const su=mode==='signup';$('app').innerHTML=`<div class="max-w-sm mx-auto p-4"><h1 class="text-xl font-bold my-4">🧾 Multi-Shop Bill Calculator</h1><div class="card">
+<div class="grid grid-cols-2 gap-2 mb-2"><button class="btn ${su?'g':''}" onclick="mode='login';showAuth()">Login</button><button class="btn ${su?'':'g'}" onclick="mode='signup';showAuth()">Sign up</button></div>
+<input id="ae" type="email" placeholder="Email" autocomplete="username"><input id="ap" type="password" placeholder="Password (min 8 characters)" autocomplete="${su?'new-password':'current-password'}">
+${su?'<input id="ap2" type="password" placeholder="Confirm password" autocomplete="new-password">':''}
+<label class="flex items-center gap-2 my-2"><input type="checkbox" id="ak"> Keep me signed in on this device</label>
+<button class="btn w-full" onclick="authGo()">${su?'Create account':'Login'}</button><div id="ame" class="mt-2" style="color:var(--bad)"></div></div>
+<p class="m">Note: accounts are stored only in this browser on this device. A client-only app cannot verify the same account on another device; that needs a server. This login keeps casual users out of your data. It is not strong security.</p></div>`}
+async function authGo(){const err=m=>$('ame').textContent=m;err('');try{
+ const e=$('ae').value.trim().toLowerCase(),p=$('ap').value,keep=$('ak').checked,us=users();
+ if(!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(e))return err('Enter a valid email address.');
+ if(p.length<8)return err('Password must be at least 8 characters.');
+ if(mode==='signup'){if($('ap2').value!==p)return err('Passwords do not match.');if(us[e])return err('An account with this email already exists on this device. Log in instead.');
+  const salt=crypto.getRandomValues(new Uint8Array(16));us[e]={id:hex(8),salt:b64(salt),hash:b64(await hashPw(p,salt,ITER)),it:ITER,fails:0,lock:0,tokens:[]};
+  if(!saveUsers(us))return err('Could not save the account.');return begin(e,keep)}
+ const u=us[e];if(!u)return err('Invalid email or password (accounts are per device; sign up here first).');
+ if(Date.now()<u.lock)return err(`Too many attempts. Try again in ${Math.ceil((u.lock-Date.now())/1000)} s.`);
+ if(!same(await hashPw(p,unb(u.salt),u.it),unb(u.hash))){u.fails=(u.fails||0)+1;if(u.fails%5===0)u.lock=Date.now()+Math.min(9e5,3e4*2**(u.fails/5-1));saveUsers(us);return err(u.fails%5===0?'Too many failed attempts. Locked for a short while.':'Invalid email or password.')}
+ u.fails=0;u.lock=0;saveUsers(us);begin(e,keep)}catch(x){err('Sign-in failed: '+x.message)}}
+function begin(e,keep){const us=users(),u=us[e],token=hex(24);u.tokens=[...(u.tokens||[]).slice(-4),token];saveUsers(us);
+ try{const s=JSON.stringify({e,token});sessionStorage.removeItem('msb.session');localStorage.removeItem('msb.session');(keep?localStorage:sessionStorage).setItem('msb.session',s)}catch(x){toast('Could not store session: '+x.message,1)}
+ start(e,u.id)}
+function logout(){try{if(T&&T.status==='rec')pauseTrip();const s=JSON.parse(sessionStorage.getItem('msb.session')||localStorage.getItem('msb.session')||'null'),us=users();
+ if(s&&us[s.e]){us[s.e].tokens=(us[s.e].tokens||[]).filter(t=>t!==s.token);saveUsers(us)}sessionStorage.removeItem('msb.session');localStorage.removeItem('msb.session')}catch(x){toast('Logout issue: '+x.message,1)}
+ stopWatch();relWake();clearInterval(tm);U=null;B=null;T=null;mode='login';showAuth()}
+async function chPw(){try{const c=$('cp0').value,n=$('cp1').value;if(n.length<8)return toast('New password must be at least 8 characters.',1);if(n!==$('cp2').value)return toast('New passwords do not match.',1);
+ const us=users(),u=us[U.email];if(!same(await hashPw(c,unb(u.salt),u.it),unb(u.hash)))return toast('Current password is wrong.',1);
+ const salt=crypto.getRandomValues(new Uint8Array(16));u.salt=b64(salt);u.it=ITER;u.hash=b64(await hashPw(n,salt,ITER));u.tokens=[];saveUsers(us);toast('Password changed. Please log in again.');setTimeout(logout,1200)}catch(x){toast('Password change failed: '+x.message,1)}}
+function init(){try{const s=JSON.parse(sessionStorage.getItem('msb.session')||localStorage.getItem('msb.session')||'null');
+ if(s){const u=users()[s.e];if(u&&(u.tokens||[]).includes(s.token))return start(s.e,u.id)}}catch(e){}showAuth()}
+
+/* ---------- SHELL ---------- */
+const TABS=['Bill','Trip','Stock','Orders','Setup'];
+function start(email,id){U={email,id};B=newB();D=today();tripLoad();
+ $('app').innerHTML=`<div class="sticky top-0 z-40" style="background:var(--bg)"><div class="flex justify-between items-center px-3 pt-2"><b>🧾 Bill Calculator</b><span class="m truncate ml-2">${esc(email)}</span></div>
+ <nav class="grid grid-cols-5 max-w-xl mx-auto">${TABS.map(t=>`<button class="tab" data-t="${t}" onclick="go('${t}')">${t}</button>`).join('')}</nav></div><main id="v" class="px-3 pb-24 max-w-xl mx-auto"></main>`;
+ go('Bill');detect(true)}
+function go(t){tab=t;clearInterval(tm);if(map){map.remove();map=null}stopScan();document.querySelectorAll('.tab').forEach(e=>e.classList.toggle('on',e.dataset.t===t));
+ ({Bill:viewBill,Trip:viewTrip,Stock:viewStock,Orders:viewOrders,Setup:viewSetup})[t]();window.scrollTo(0,0)}
+
+/* ---------- LEDGER / INVENTORY ---------- */
+function ledger(shop,skipId,upTo){const k=String(shop).trim().toLowerCase();let bal=0,h=[];
+ allBills().filter(b=>b.shop.trim().toLowerCase()===k&&b.id!==skipId).sort((a,b)=>a.id-b.id).forEach(b=>{if(upTo&&b.id>upTo)return;
+  if(b.paid>0)h.push({d:b.date,t:b.time,amt:b.paid,type:b.payType,k:'Present bill'});if(b.oldPaid>0)h.push({d:b.date,t:b.time,amt:b.oldPaid,type:b.payType,k:'Old due cleared'});bal+=b.due-(b.oldPaid||0)});return{bal,h}}
+function inv(date,skipId){const m={},get=(n,g)=>m[key(n,g)]=m[key(n,g)]||{name:n,grade:g,load:0,sold:0};
+ ((G('stock',{}))[date]||[]).forEach(s=>get(s.name,s.grade).load+=+s.qty);
+ (orders()[date]||[]).filter(b=>b.id!==skipId).forEach(b=>b.items.forEach(i=>get(i.name,i.grade).sold+=+i.qty));
+ return Object.values(m).map(x=>({...x,rem:x.load-x.sold}))}
+const low=x=>x.load>0&&x.rem<=Math.max(5,x.load*.1);
+function tot(bills){const o={grand:0,cash:0,upi:0,oldC:0,oldU:0,due:0};bills.forEach(b=>{o.grand+=b.total;o.due+=b.due;(b.payType==='UPI'?o:o);if(b.payType==='UPI'){o.upi+=b.paid;o.oldU+=b.oldPaid||0}else{o.cash+=b.paid;o.oldC+=b.oldPaid||0}});return o}
+
+/* ---------- SHOP DETECTION ---------- */
+const msg=(t,bad)=>{const e=$('gmsg');if(e){e.textContent=t;e.style.color=bad?'var(--bad)':'var(--m)'}};
+const getPos=()=>new Promise((ok,no)=>{if(!window.isSecureContext)return no({m:'Location needs https or localhost (insecure context). Type the shop manually.'});if(!navigator.geolocation)return no({m:'Geolocation is not supported on this device.'});
+ navigator.geolocation.getCurrentPosition(ok,e=>no({m:{1:'Location permission denied. Allow it in browser settings or type the shop manually.',2:'Location unavailable. Check GPS/network.',3:'Location timed out. Try again with a clear sky view.'}[e.code]||e.message}),{enableHighAccuracy:true,timeout:15000,maximumAge:0})});
+async function fj(u){const c=new AbortController(),t=setTimeout(()=>c.abort(),8000);try{const r=await fetch(u,{signal:c.signal});if(!r.ok)throw new Error('HTTP '+r.status);return await r.json()}finally{clearTimeout(t)}}
+async function rev(a,b){try{const j=await fj(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${a}&lon=${b}`),x=j.address||{};return x.suburb||x.neighbourhood||x.village||x.town||x.city||(j.display_name||'').split(',').slice(0,2).join(',')}
+ catch(e){try{const j=await fj(`https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${a}&longitude=${b}&localityLanguage=en`);return j.locality||j.city||j.principalSubdivision||''}catch(e2){return''}}}
+async function detect(auto){msg('Detecting location…');try{const p=await getPos(),a=p.coords.latitude,b=p.coords.longitude;lastPos={lat:a,lng:b};let best=null;
+ shops().forEach(s=>{const d=hav(a,b,s.lat,s.lng);if(d<=cfg().radius&&(!best||d<best.d))best={s,d}});
+ if(best){B.shop=best.s.name;B.place=best.s.place;fillShop();msg(`Matched saved shop "${best.s.name}" (${Math.round(best.d)} m away).`)}
+ else{const pl=await rev(a,b);if(pl&&!B.place){B.place=pl;fillShop()}msg(`No saved shop within ${cfg().radius} m. ${pl?'Place filled from map data. ':'Could not look up the place name. '}Type the shop name, then tap "Save GPS spot".`,!pl)}}
+ catch(e){msg((e.m||e.message)+(auto?'':''),1)}}
+function fillShop(){if($('shop'))$('shop').value=B.shop;if($('place'))$('place').value=B.place}
+function saveSpot(){try{if(!lastPos)return toast('No GPS fix yet. Tap "Detect Shop" first.',1);if(!B.shop.trim())return toast('Type the shop name first.',1);
+ const l=shops().filter(s=>!(s.name.toLowerCase()===B.shop.trim().toLowerCase()));l.push({name:B.shop.trim(),lat:lastPos.lat,lng:lastPos.lng,place:B.place.trim()});if(S('shops',l))toast('Shop saved at current GPS spot.')}catch(e){toast('Save failed: '+e.message,1)}}
+
+/* ---------- BILL ---------- */
+const newB=()=>({shop:'',place:'',rows:[{name:'',qty:'',grade:'A',price:'',cust:false}],oldPaid:'',payType:'Cash',paid:'',upi:{},editId:null,date:null});
+function viewBill(){const u=B.upi||{},up=B.payType==='UPI';$('v').innerHTML=`
+<div class="card">${B.editId?`<div class="mb-2 font-bold" style="color:var(--p)">Editing saved bill <button class="btn g ml-2" onclick="B=newB();viewBill()">Cancel edit</button></div>`:''}
+<div class="grid grid-cols-2 gap-2"><button class="btn" onclick="detect()">📍 Detect Shop</button><button class="btn g" onclick="saveSpot()">Save GPS spot</button></div><div id="gmsg" class="m mt-1"></div>
+<label class="m">Shop Name</label><input id="shop" value="${esc(B.shop)}" oninput="B.shop=this.value;calc()" autocomplete="off">
+<label class="m">Location Name (place)</label><input id="place" value="${esc(B.place)}" oninput="B.place=this.value" autocomplete="off"></div>
+<div id="rows"></div><button class="btn g w-full" onclick="B.rows.push({name:'',qty:'',grade:'A',price:'',cust:false});rowsHtml()">+ Add Item</button>
+<div class="card"><label class="m">Old bill due paid this visit (previous balance)</label><input type="number" inputmode="decimal" min="0" value="${B.oldPaid}" oninput="B.oldPaid=this.value;calc()">
+<label class="m">Payment type</label><div class="grid grid-cols-2 gap-2"><button class="btn ${up?'g':''}" onclick="B.payType='Cash';viewBill()">Cash</button><button class="btn ${up?'':'g'}" onclick="B.payType='UPI';viewBill()">UPI</button></div>
+<label class="m">Amount paid (present bill)</label><input id="paid" type="number" inputmode="decimal" min="0" value="${B.paid}" oninput="B.paid=this.value;calc()">
+${up?`<div class="grid grid-cols-2 gap-2 my-2"><button class="btn" onclick="scanPay()">📷 Scan and Pay</button><button class="btn g" onclick="openUpi()">Open UPI app</button></div>
+<div class="grid grid-cols-2 gap-x-2">${[['pa','Payee UPI ID'],['pn','Payee name'],['am','QR amount'],['tn','Note'],['tr','Ref (tr)'],['utr','UPI txn / UTR no.']].map(([k,l])=>`<div><label class="m">${l}</label><input value="${esc(u[k]||'')}" oninput="B.upi.${k}=this.value"></div>`).join('')}</div>
+<div class="m">UPI – reference entered by user (not bank-verified). This app cannot confirm the payment succeeded.</div>`:''}</div>
+<div class="card" id="sum"></div><div id="warn" class="mb-2"></div>
+<button class="btn w-full" onclick="saveBill()">${B.editId?'Update bill':'Save bill'}</button>`;rowsHtml()}
+function rowsHtml(){$('rows').innerHTML=B.rows.map((r,i)=>`<div class="card"><div class="flex justify-between"><b>Item ${i+1}</b>${B.rows.length>1?`<button class="m p-2" onclick="B.rows.splice(${i},1);rowsHtml()">✕ Remove</button>`:''}</div>
+<div class="relative"><input placeholder="Item name" value="${esc(r.name)}" autocomplete="off" onfocus="dd(${i},this)" oninput="rin(${i},'name',this.value);dd(${i},this)" onblur="setTimeout(()=>{const e=$('dd${i}');if(e)e.style.display='none'},250)"><div class="dd" id="dd${i}" style="display:none"></div></div>
+<div class="grid grid-cols-2 gap-2"><input type="number" inputmode="decimal" min="0" placeholder="Quantity" value="${r.qty}" oninput="rin(${i},'qty',this.value)"><input type="number" inputmode="decimal" min="0" placeholder="Unit price ₹" value="${r.price}" oninput="rin(${i},'price',this.value)"></div>
+<div class="grid grid-cols-2 gap-2"><select onchange="gsel(${i},this.value)">${['A','B','C','Custom'].map(g=>`<option ${(r.cust?'Custom':r.grade)===g?'selected':''}>${g}</option>`).join('')}</select>${r.cust?`<input placeholder="Custom grade" value="${esc(r.grade)}" oninput="rin(${i},'grade',this.value)">`:'<div></div>'}</div>
+<div class="text-right font-semibold" id="lt${i}"></div></div>`).join('');calc()}
+function rin(i,k,v){B.rows[i][k]=v;calc()}
+function gsel(i,v){const r=B.rows[i];if(v==='Custom'){r.cust=true;r.grade=''}else{r.cust=false;r.grade=v}rowsHtml()}
+function dd(i,el){const q=el.value.trim().toLowerCase();ddl=Object.keys(cat()).filter(n=>n.includes(q));const d=$('dd'+i);d.innerHTML=ddl.map((n,j)=>`<div onpointerdown="pick(${i},${j})">${esc(n)}</div>`).join('');d.style.display=ddl.length?'block':'none'}
+function pick(i,j){const n=ddl[j],r=B.rows[i],p=cat()[n];r.name=n;if(p)r.price=p;rowsHtml()}
+function calc(){let t=0;B.rows.forEach((r,i)=>{const l=(+r.qty||0)*(+r.price||0);t+=l;const e=$('lt'+i);if(e)e.textContent='Line total: '+R(l)});
+ const paid=+B.paid||0,due=Math.max(0,t-paid),prev=ledger(B.shop,B.editId,B.editId?B.editId-1:0).bal;
+ $('sum').innerHTML=`<div class="flex justify-between"><span>Present bill total</span><b>${R(t)}</b></div><div class="flex justify-between"><span>Amount paid</span><span>${R(paid)}</span></div>
+ <div class="flex justify-between text-lg"><b>Amount due</b><b style="color:${due?'var(--bad)':'var(--ok)'}">${R(due)}</b></div><hr class="my-2" style="border-color:var(--b)">
+ <div class="flex justify-between m"><span>Old outstanding for this shop</span><span>${R(prev)}</span></div><div class="flex justify-between m"><span>Old due paid now</span><span>${R(+B.oldPaid||0)}</span></div>
+ <div class="flex justify-between m"><span>Ledger balance after this bill</span><span>${R(prev-(+B.oldPaid||0)+due)}</span></div>`;
+ const need={};B.rows.forEach(r=>{if(r.name&&+r.qty>0){const k=key(r.name,r.grade);need[k]=(need[k]||0)+ +r.qty}});
+ const iv=inv(B.date||today(),B.editId),w=[];if(iv.some(y=>y.load))Object.entries(need).forEach(([k,q])=>{const x=iv.find(y=>key(y.name,y.grade)===k&&y.load>0);if(!x)w.push(`"${k.replace('|',' / ')}" is not in the vehicle stock.`);else if(q>x.rem)w.push(`Selling ${q} of "${x.name} / ${x.grade}" but only ${x.rem} remain.`)});
+ $('warn').innerHTML=w.map(x=>`<div class="low">⚠ ${esc(x)}</div>`).join('')}
+function saveBill(){try{const err=m=>{toast(m,1);return 0};if(!B.shop.trim())return err('Shop name is required.');if(!B.place.trim())return err('Location name is required.');
+ const items=[];for(const[i,r]of B.rows.entries()){const n=i+1;if(!r.name.trim())return err(`Item ${n}: name is missing.`);if(!(+r.qty>0))return err(`Item ${n}: quantity must be above 0.`);if(!String(r.grade).trim())return err(`Item ${n}: quality/grade is missing.`);if(r.price===''||!(+r.price>=0))return err(`Item ${n}: unit price is missing.`);
+  items.push({name:r.name.trim(),qty:+r.qty,grade:String(r.grade).trim(),price:+r.price,total:+r.qty*+r.price})}
+ const total=items.reduce((a,i)=>a+i.total,0),paid=+B.paid||0,old=+B.oldPaid||0;if(paid<0||old<0)return err('Amounts cannot be negative.');
+ if(paid>total)return err(`Amount paid (${R(paid)}) is above the bill total (${R(total)}). Put previous-balance payments in the "Old bill due paid" field.`);
+ const prev=ledger(B.shop,B.editId,B.editId?B.editId-1:0).bal;if(old>prev)return err(`Old due paid (${R(old)}) is more than the outstanding balance (${R(prev)}).`);
+ const date=B.date||today(),iv=inv(date,B.editId),over=[];items.forEach(i=>{const x=iv.find(y=>key(y.name,y.grade)===key(i.name,i.grade)&&y.load>0);if(iv.some(y=>y.load)&&(!x||i.qty>x.rem))over.push(i.name+' / '+i.grade)});
+ if(over.length&&!confirm('Stock warning: not enough stock for '+over.join(', ')+'. Save anyway?'))return;
+ const up=B.payType==='UPI'?{...B.upi}:null,ors=orders(),bill={id:B.editId||Date.now(),date,time:nowT(),location:B.place.trim(),shop:B.shop.trim(),items,total,payType:B.payType,paid,due:Math.max(0,total-paid),oldPaid:old,upi:up,tripId:T?T.id:null,lat:lastPos?lastPos.lat:null,lng:lastPos?lastPos.lng:null};
+ if(B.editId){for(const d in ors){const k=ors[d].findIndex(b=>b.id===B.editId);if(k>=0){const o=ors[d][k];bill.time=o.time;bill.tripId=o.tripId;bill.lat=o.lat;bill.lng=o.lng;bill.edited=true;ors[d][k]=bill}}}else(ors[date]=ors[date]||[]).push(bill);
+ if(!S('orders',ors))return;const c=cat();items.forEach(i=>c[i.name.toLowerCase()]=i.price);S('catalog',c);toast(B.editId?'Bill updated.':'Bill saved.');B=newB();viewBill()}catch(e){toast('Save failed: '+e.message,1)}}
+
+/* ---------- UPI ---------- */
+function applyUpi(t){if(!/^upi:/i.test(t))return false;const q=new URLSearchParams(t.split('?')[1]||'');B.upi={...B.upi,pa:q.get('pa')||'',pn:q.get('pn')||'',am:q.get('am')||'',tn:q.get('tn')||'',tr:q.get('tr')||''};if(q.get('am')&&!B.paid)B.paid=q.get('am');return true}
+function openUpi(){const u=B.upi||{};if(!u.pa)return toast('Enter or scan the payee UPI ID first.',1);const e=encodeURIComponent;location.href=`upi://pay?pa=${e(u.pa)}&pn=${e(u.pn||'')}&am=${e(B.paid||u.am||'')}&tn=${e(u.tn||'')}&cu=INR${u.tr?'&tr='+e(u.tr):''}`}
+async function scanPay(){modal(`<h3 class="font-bold">Scan and Pay</h3><video id="qv" playsinline muted style="width:100%;border-radius:8px;background:#000"></video><canvas id="qc" hidden></canvas><div id="qm" class="m my-2">Starting camera…</div><button class="btn g w-full" onclick="closeModal()">Close</button>`);
+ const qm=$('qm');try{if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia)throw new Error('Camera needs https or localhost.');
+  qs=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}});const v=$('qv');v.srcObject=qs;await v.play();
+  const det='BarcodeDetector' in window?new BarcodeDetector({formats:['qr_code']}):null;if(!det&&typeof jsQR==='undefined')throw new Error('No QR decoder available (jsQR did not load).');
+  qm.textContent='Point the camera at the UPI QR code.';const c=$('qc'),x=c.getContext('2d',{willReadFrequently:true});
+  const loop=async()=>{if(!qs)return;try{let t=null;if(det){const r=await det.detect(v);t=r[0]&&r[0].rawValue}else if(v.videoWidth){c.width=v.videoWidth;c.height=v.videoHeight;x.drawImage(v,0,0);const im=x.getImageData(0,0,c.width,c.height),r=jsQR(im.data,im.width,im.height);t=r&&r.data}
+   if(t){if(applyUpi(t)){closeModal();viewBill();toast('UPI details captured. Enter the UTR once paid.');return}qm.textContent='That QR is not a UPI payment code.'}}catch(e){}requestAnimationFrame(loop)};loop()}
+ catch(e){qm.textContent=(e.name==='NotAllowedError'?'Camera permission denied. ':'')+e.message+' Close this and type the UPI details by hand.';qm.style.color='var(--bad)'}}
+function stopScan(){if(qs){qs.getTracks().forEach(t=>t.stop());qs=null}}
+
+/* ---------- TRIP ---------- */
+const el=t=>t.acc+(t.status==='rec'?Date.now()-t.rs:0);
+const saveTrip=()=>{if(T){T.saved=Date.now();S('curtrip',T)}};
+function tripLoad(){T=G('curtrip',null);if(T&&T.status==='rec'){T.acc+=Math.max(0,(T.saved||T.rs)-T.rs);T.status='paused';T.rs=null;saveTrip();setTimeout(()=>toast('A trip was recording when the page closed. Tap Resume to continue.'),500)}}
+async function wake(){try{if('wakeLock' in navigator)wl=await navigator.wakeLock.request('screen');else toast('Wake Lock not supported: keep the screen on manually.',1)}catch(e){toast('Could not keep screen awake: '+e.message,1)}}
+const relWake=()=>{try{if(wl)wl.release().catch(()=>{})}catch(e){}wl=null};
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&T&&T.status==='rec'&&!wl)wake()});
+function startWatch(){if(!window.isSecureContext||!navigator.geolocation){toast('GPS tracking needs https/localhost and a device with geolocation.',1);return false}
+ try{W=navigator.geolocation.watchPosition(onFix,e=>toast({1:'Location permission denied. Trip cannot record.',2:'GPS unavailable right now.',3:'GPS timed out; still trying.'}[e.code]||e.message,1),{enableHighAccuracy:true,maximumAge:0,timeout:20000});return true}catch(e){toast('GPS error: '+e.message,1);return false}}
+const stopWatch=()=>{try{if(W!=null)navigator.geolocation.clearWatch(W)}catch(e){}W=null};
+function onFix(p){const{latitude:a,longitude:b,accuracy:c}=p.coords;lastPos={lat:a,lng:b};if(!T||T.status!=='rec')return;if(c>50){T.ign=(T.ign||0)+1;return}
+ const l=T.pts[T.pts.length-1];if(l){const d=hav(l[0],l[1],a,b);if(d<5)return;T.dist+=d}T.pts.push([a,b,Date.now()]);if(T.pts.length%3===0||T.pts.length===1)saveTrip()}
+function startTrip(){if(T)return;if(!startWatch())return;T={id:Date.now(),date:today(),start:Date.now(),pts:[],dist:0,acc:0,rs:Date.now(),status:'rec',ign:0};saveTrip();wake();viewTrip()}
+function pauseTrip(){if(!T||T.status!=='rec')return;T.acc=el(T);T.status='paused';T.rs=null;stopWatch();relWake();saveTrip();if(tab==='Trip')viewTrip()}
+function resumeTrip(){if(!T||!startWatch())return;T.status='rec';T.rs=Date.now();saveTrip();wake();viewTrip()}
+function endTrip(){if(!T||!confirm('Complete this trip?'))return;if(T.status==='rec')pauseTrip();const t=T,km=t.dist/1000;
+ const lb=allBills().filter(b=>b.tripId===t.id).sort((a,b)=>a.id-b.id).pop(),lp=t.pts[t.pts.length-1];let dest=null;
+ if(lb){const s=shops().find(x=>x.name.toLowerCase()===lb.shop.toLowerCase()),c=s?[s.lat,s.lng]:lb.lat!=null?[lb.lat,lb.lng]:lp;if(c)dest={lat:c[0],lng:c[1],label:lb.shop}}
+ if(!dest&&lp)dest={lat:lp[0],lng:lp[1],label:'Final GPS point'};
+ const done={id:t.id,date:t.date,start:t.start,end:Date.now(),pts:t.pts,dist:t.dist,elapsed:t.acc,avg:t.acc>0?km/(t.acc/3600000):0,dest},all=trips();(all[t.date]=all[t.date]||[]).push(done);
+ if(!S('trips',all))return;T=null;S('curtrip',null);viewTrip();showMap(done);if(!done.pts.length)toast('Trip saved, but no GPS points were recorded.',1)}
+function viewTrip(){const past=Object.entries(trips()).sort((a,b)=>b[0].localeCompare(a[0])).flatMap(([d,a])=>a.map(t=>({...t,d}))).slice(0,20);
+ $('v').innerHTML=`<div class="card"><b>Live trip</b><div id="tl" class="my-2"></div><div id="tb" class="grid grid-cols-2 gap-2"></div><p class="m mt-2">Keep the app open and the screen on while recording. The app asks the phone to stay awake where supported.</p></div>
+ <div id="mapwrap" style="display:none;position:relative" class="my-2"><div id="map" style="height:62vh;border-radius:12px"></div><div id="mc" style="position:absolute;left:8px;right:8px;top:8px;z-index:1000;background:var(--c);color:var(--t);border-radius:12px;padding:8px;box-shadow:0 2px 10px #0006"></div></div>
+ <div class="card"><b>Past trips</b>${past.length?past.map(t=>{const bl=allBills().filter(b=>b.tripId===t.id);return`<div class="py-2 border-t" style="border-color:var(--b)"><div class="flex justify-between"><b>${esc(t.d)}</b><button class="btn g" onclick="reopen(${t.id})">🗺 Map</button></div>
+ <div class="m">${(t.dist/1000).toFixed(2)} km · ${hm(t.elapsed)} · ${t.avg.toFixed(1)} km/h · ${bl.length} bill(s), ${R(bl.reduce((a,b)=>a+b.total,0))}</div></div>`}).join(''):'<div class="m">No completed trips yet. Start a trip to record one.</div>'}</div>`;
+ tripUi.s=null;tripUi();tm=setInterval(tripUi,1000)}
+function tripUi(){if(!$('tl'))return;const s=T?T.status:'none';
+ if(T){const km=T.dist/1000,e=el(T);$('tl').innerHTML=`<div>${s==='rec'?'🔴 Recording':'⏸ Paused'}</div><div class="grid grid-cols-3 text-center"><div><b>${km.toFixed(2)}</b><div class="m">km</div></div><div><b>${hm(e)}</b><div class="m">time</div></div><div><b>${e>0?(km/(e/3600000)).toFixed(1):'0.0'}</b><div class="m">km/h</div></div></div><div class="m">${T.pts.length} points · ${T.ign||0} weak fixes ignored</div>`}else $('tl').textContent='No trip in progress.';
+ if(tripUi.s!==s){tripUi.s=s;$('tb').innerHTML=s==='none'?'<button class="btn col-span-2" onclick="startTrip()">▶ Start Trip</button>':`<button class="btn" onclick="${s==='rec'?'pauseTrip()':'resumeTrip()'}">${s==='rec'?'⏸ Pause':'▶ Resume'}</button><button class="btn r" onclick="endTrip()">■ Complete Trip</button>`}}
+function reopen(id){const t=Object.values(trips()).flat().find(x=>x.id===id);if(t){showMap(t);$('mapwrap').scrollIntoView()}}
+function showMap(t){try{const w=$('mapwrap');if(map){map.remove();map=null}if(!t.pts.length){w.style.display='none';return toast('This trip has no GPS points to draw.',1)}if(typeof L==='undefined')return toast('Map library did not load (offline?). Distances are still saved.',1);
+ w.style.display='block';map=L.map('map');L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'}).addTo(map);
+ const ll=t.pts.map(p=>[p[0],p[1]]);L.polyline(ll,{color:'#fff',weight:11,opacity:.9}).addTo(map);L.polyline(ll,{color:'#ff2d55',weight:7,lineCap:'round'}).addTo(map);
+ const pin=(c,l)=>L.divIcon({className:'',html:`<div style="background:${c};color:#fff;border:3px solid #fff;border-radius:50%;width:34px;height:34px;display:flex;align-items:center;justify-content:center;font-weight:700;box-shadow:0 1px 6px #0008">${l}</div>`,iconSize:[34,34],iconAnchor:[17,17]});
+ L.marker(ll[0],{icon:pin('#16a34a','A')}).addTo(map).bindPopup('Origin (start)');
+ const d=t.dest||{lat:ll[ll.length-1][0],lng:ll[ll.length-1][1],label:'Final GPS point'};L.marker([d.lat,d.lng],{icon:pin('#dc2626','⚑')}).addTo(map).bindPopup('Destination: '+esc(d.label));
+ map.fitBounds(L.latLngBounds(ll.concat([[d.lat,d.lng]])).pad(.2));setTimeout(()=>map&&map.invalidateSize(),200);
+ $('mc').innerHTML=`<div class="grid grid-cols-3 text-center"><div><b>${(t.dist/1000).toFixed(2)}</b><div class="m">Distance km</div></div><div><b>${hm(t.elapsed)}</b><div class="m">Elapsed</div></div><div><b>${t.avg.toFixed(1)}</b><div class="m">Avg km/h</div></div></div><div class="m text-center">To: ${esc(d.label)}</div>`}catch(e){toast('Map error: '+e.message,1)}}
+
+/* ---------- STOCK ---------- */
+function viewStock(){SR=((G('stock',{}))[D]||[]).map(x=>({...x}));if(!SR.length)SR=[{name:'',grade:'A',qty:''}];drawStock()}
+function drawStock(){const iv=inv(D),L=iv.reduce((a,x)=>a+x.load,0),Sd=iv.reduce((a,x)=>a+x.sold,0);
+ $('v').innerHTML=`<div class="card"><label class="m">Date</label><input type="date" value="${D}" onchange="D=this.value||today();viewStock()"></div>
+ <div class="card"><div class="grid grid-cols-3 text-center"><div><b>${L}</b><div class="m">Loaded</div></div><div><b>${Sd}</b><div class="m">Sold</div></div><div><b class="${L-Sd<=Math.max(5,L*.1)&&L?'low':''}">${L-Sd}</b><div class="m">Remaining</div></div></div></div>
+ <div class="card"><b>Per item</b>${iv.length?iv.map(x=>`<div class="flex justify-between py-1 border-t ${low(x)||x.rem<0?'low':''}" style="border-color:var(--b)"><span class="min-w-0 break-words">${esc(x.name)} [${esc(x.grade)}]</span><span class="whitespace-nowrap">${x.load} / ${x.sold} / ${x.rem}${x.rem<0?' OVERSOLD':low(x)?' LOW':''}</span></div>`).join('')+'<div class="m">loaded / sold / remaining</div>':'<div class="m">No stock recorded for this date.</div>'}</div>
+ <div class="card"><b>Initial vehicle stock (${D})</b>${SR.map((r,i)=>`<div class="grid grid-cols-5 gap-1 items-center"><input class="col-span-2" list="cl" placeholder="Item" value="${esc(r.name)}" oninput="SR[${i}].name=this.value"><input placeholder="Grade" value="${esc(r.grade)}" oninput="SR[${i}].grade=this.value"><input type="number" min="0" placeholder="Qty" value="${r.qty}" oninput="SR[${i}].qty=this.value"><button class="m" onclick="SR.splice(${i},1);drawStock()">✕</button></div>`).join('')}
+ <datalist id="cl">${Object.keys(cat()).map(n=>`<option value="${esc(n)}">`).join('')}</datalist><div class="grid grid-cols-2 gap-2 mt-2"><button class="btn g" onclick="SR.push({name:'',grade:'A',qty:''});drawStock()">+ Add row</button><button class="btn" onclick="saveStock()">Save stock</button></div></div>`}
+function saveStock(){try{const rows=SR.filter(r=>r.name.trim()||r.qty!=='');for(const r of rows){if(!r.name.trim()||!String(r.grade).trim()||!(+r.qty>=0)||r.qty==='')return toast('Every stock row needs item, grade and a quantity.',1)}
+ const st=G('stock',{});st[D]=rows.map(r=>({name:r.name.trim(),grade:String(r.grade).trim(),qty:+r.qty}));if(S('stock',st)){const c=cat();rows.forEach(r=>{if(!(r.name.trim().toLowerCase()in c))c[r.name.trim().toLowerCase()]=0});S('catalog',c);toast('Stock saved.');viewStock()}}catch(e){toast('Save failed: '+e.message,1)}}
+
+/* ---------- ORDERS ---------- */
+function billCard(b){const lb=ledger(b.shop,null,b.id).bal;return`<div class="card"><div class="flex justify-between gap-2"><b class="break-words min-w-0">${esc(b.shop)}</b><span class="m">${esc(b.time)}${b.edited?' (edited)':''}</span></div><div class="m">📍 ${esc(b.location)}${b.tripId?' · on trip':''}</div>
+ ${b.items.map((i,k)=>`<div class="flex justify-between gap-2 py-1 border-t" style="border-color:var(--b)"><span class="min-w-0 break-words">${esc(i.name)} <span class="m">[${esc(i.grade)}] ${i.qty} × ${R(i.price)}</span></span><span class="whitespace-nowrap">${R(i.total)} <button class="p-2" aria-label="Delete item" onclick="delItem(${b.id},${k})">✕</button></span></div>`).join('')}
+ <div class="mt-2 p-2 rounded" style="background:var(--bg)"><b>Present bill</b><div class="flex justify-between"><span>Total</span><b>${R(b.total)}</b></div><div class="flex justify-between"><span>Paid (${esc(b.payType)})</span><span>${R(b.paid)}</span></div><div class="flex justify-between"><span>Due</span><b style="color:${b.due?'var(--bad)':'var(--ok)'}">${R(b.due)}</b></div>
+ ${b.upi?`<div class="m break-words">UPI – reference entered by user (not bank-verified)<br>${esc(b.upi.pa||'-')} · ${esc(b.upi.pn||'-')} · QR amt ${esc(b.upi.am||'-')} · note ${esc(b.upi.tn||'-')} · ref ${esc(b.upi.tr||'-')} · UTR ${esc(b.upi.utr||'-')}</div>`:''}</div>
+ <div class="mt-2 p-2 rounded" style="background:var(--bg)"><b>Old bill ledger</b><div class="flex justify-between"><span>Old due paid this visit</span><span>${R(b.oldPaid||0)}</span></div><div class="flex justify-between"><span>Shop balance after bill</span><b>${R(lb)}</b></div></div>
+ <div class="grid grid-cols-2 gap-2 mt-2"><button class="btn g" onclick="editBill(${b.id})">✎ Edit</button><button class="btn r" onclick="delBill(${b.id})">Delete bill</button></div></div>`}
+function viewOrders(){const bl=(orders()[D]||[]).slice().sort((a,b)=>a.id-b.id),t=tot(bl),sh=[...new Set(allBills().map(b=>b.shop.trim()))].sort();
+ $('v').innerHTML=`<div class="card"><label class="m">Date</label><input type="date" value="${D}" onchange="D=this.value||today();viewOrders()"></div>
+ ${bl.length?bl.map(billCard).join(''):'<div class="card m">No bills on this date.</div>'}
+ <div class="card"><b>Day totals</b><div class="flex justify-between"><span>Grand total</span><b>${R(t.grand)}</b></div><div class="flex justify-between"><span>Cash collected</span><span>${R(t.cash)}</span></div><div class="flex justify-between"><span>UPI collected (unverified)</span><span>${R(t.upi)}</span></div><div class="flex justify-between"><span>Old dues collected</span><span>${R(t.oldC+t.oldU)}</span></div><div class="flex justify-between"><span>New dues created</span><span>${R(t.due)}</span></div></div>
+ <div class="grid grid-cols-2 gap-2"><button class="btn" onclick="exportAsk(0)">⬇ Day .txt</button><button class="btn" onclick="exportAsk(1)">⬇ All days .txt</button></div><button class="btn g w-full mt-2" onclick="window.print()">🖨 Print / Save as PDF</button>
+ <div class="card"><b>Shop ledgers</b>${sh.length?sh.map(s=>{const l=ledger(s);return`<details class="py-1 border-t" style="border-color:var(--b)"><summary class="min-h-[44px] flex items-center justify-between"><span class="break-words">${esc(s)}</span><b style="color:${l.bal?'var(--bad)':'var(--ok)'}">${R(l.bal)}</b></summary>${l.h.length?l.h.map(h=>`<div class="m">${esc(h.d)} ${esc(h.t)} · ${esc(h.k)} · ${R(h.amt)} · ${esc(h.type)}</div>`).join(''):'<div class="m">No payments yet.</div>'}<div class="m">Cleared: ${R(allBills().filter(b=>b.shop.trim()===s).reduce((a,b)=>a+(b.oldPaid||0),0))}</div></details>`}).join(''):'<div class="m">No bills yet.</div>'}</div>`}
+function mutate(id,fn){const o=orders();for(const d in o){const k=o[d].findIndex(b=>b.id===id);if(k>=0){fn(o[d],k);if(!o[d].length)delete o[d];if(S('orders',o))viewOrders();return}}toast('Bill not found.',1)}
+function delBill(id){if(confirm('Delete this bill?'))mutate(id,(a,k)=>a.splice(k,1))}
+function delItem(id,i){if(!confirm('Delete this item?'))return;mutate(id,(a,k)=>{const b=a[k];b.items.splice(i,1);if(!b.items.length){a.splice(k,1);return}b.total=b.items.reduce((s,x)=>s+x.total,0);b.paid=Math.min(b.paid,b.total);b.due=Math.max(0,b.total-b.paid);b.edited=true})}
+function editBill(id){const b=allBills().find(x=>x.id===id);if(!b)return;B={shop:b.shop,place:b.location,rows:b.items.map(i=>({name:i.name,qty:i.qty,price:i.price,grade:i.grade,cust:!['A','B','C'].includes(i.grade)})),oldPaid:b.oldPaid||'',payType:b.payType,paid:b.paid||'',upi:{...(b.upi||{})},editId:b.id,date:b.date};go('Bill')}
+
+/* ---------- EXPORT (.txt only) ---------- */
+function dayTxt(date){const bl=(orders()[date]||[]).slice().sort((a,b)=>a.id-b.id),L=[],ln='='.repeat(50),UN='UPI - reference entered by user (not bank-verified)';
+ L.push('SHOP BILLS - '+date,ln,'','TRIP SUMMARY');const tr=trips()[date]||[];tr.length?tr.forEach((t,i)=>L.push(`Trip ${i+1}: Distance ${(t.dist/1000).toFixed(2)} km | Elapsed ${hm(t.elapsed)} | Average speed ${t.avg.toFixed(1)} km/h`)):L.push('No completed trip recorded.');L.push('');
+ bl.forEach((b,n)=>{L.push(ln,`BILL ${n+1}  Time: ${b.time}${b.tripId?'  (on trip)':''}`,'Location: '+b.location,'Shop: '+b.shop,'','Items:');
+  b.items.forEach((i,k)=>L.push(` ${k+1}. ${i.name} [Grade ${i.grade}]  ${i.qty} x ${RS(i.price)} = ${RS(i.total)}`));
+  L.push('','PRESENT BILL','  Bill total: '+RS(b.total),'  Payment type: '+(b.payType==='UPI'?UN:'Cash'),'  Amount paid: '+RS(b.paid),'  Amount due: '+RS(b.due));
+  if(b.upi)L.push(`  UPI payee ID: ${b.upi.pa||'-'} | Payee: ${b.upi.pn||'-'} | QR amount: ${b.upi.am||'-'} | Note: ${b.upi.tn||'-'} | Ref: ${b.upi.tr||'-'} | UTR: ${b.upi.utr||'-'}`);
+  L.push('','OLD BILL LEDGER','  Old due paid this visit: '+RS(b.oldPaid||0),'  Shop ledger balance after this bill: '+RS(ledger(b.shop,null,b.id).bal),'')});
+ const t=tot(bl);L.push(ln,'DAY TOTALS','  Grand total: '+RS(t.grand),'  Cash collected (present bills): '+RS(t.cash),'  UPI collected (present bills, not bank-verified): '+RS(t.upi),`  Old dues collected: ${RS(t.oldC+t.oldU)} (cash ${RS(t.oldC)}, UPI ${RS(t.oldU)})`,'  New dues created: '+RS(t.due),'','REMAINING VEHICLE STOCK');
+ const iv=inv(date);iv.length?iv.forEach(x=>L.push(`  ${x.name} [Grade ${x.grade}]: loaded ${x.load}, sold ${x.sold}, remaining ${x.rem}`)):L.push('  No stock recorded.');return L.join('\r\n')+'\r\n'}
+function exportAsk(all){const o=orders(),dates=all?Object.keys(o).filter(d=>o[d].length).sort():[D].filter(d=>(o[d]||[]).length);if(!dates.length)return toast('No bills to export for this selection.',1);EXD=dates;
+ modal(`<h3 class="font-bold mb-2">Export summary</h3>${dates.map(d=>{const iv=inv(d);return`<div class="mb-2"><b>${d}</b>${iv.length?iv.map(x=>`<div class="flex justify-between gap-2"><span class="break-words">${esc(x.name)} [${esc(x.grade)}]</span><span class="whitespace-nowrap">Sold ${x.sold} · Left ${x.rem}</span></div>`).join(''):'<div class="m">No stock recorded.</div>'}</div>`}).join('')}<div class="grid grid-cols-2 gap-2"><button class="btn g" onclick="closeModal()">Cancel</button><button class="btn" onclick="doExport()">Confirm</button></div>`)}
+const idb=()=>new Promise((ok,no)=>{const r=indexedDB.open('msb-fs',1);r.onupgradeneeded=()=>r.result.createObjectStore('k');r.onsuccess=()=>ok(r.result);r.onerror=()=>no(r.error)});
+const idbGet=async k=>{const d=await idb();return new Promise((ok,no)=>{const r=d.transaction('k').objectStore('k').get(k);r.onsuccess=()=>ok(r.result);r.onerror=()=>no(r.error)})};
+const idbSet=async(k,v)=>{const d=await idb();return new Promise((ok,no)=>{const t=d.transaction('k','readwrite');t.objectStore('k').put(v,k);t.oncomplete=ok;t.onerror=()=>no(t.error)})};
+async function getDir(force){let h=force?null:await idbGet('dir');if(!h){h=await showDirectoryPicker({mode:'readwrite'});await idbSet('dir',h)}
+ let p=await h.queryPermission({mode:'readwrite'});if(p!=='granted')p=await h.requestPermission({mode:'readwrite'});if(p!=='granted')throw new Error('Folder permission was not granted');return h.getDirectoryHandle('Shop Bills',{create:true})}
+async function pickFolder(){try{await getDir(true);toast('Folder saved. Files go in "Shop Bills" inside it.')}catch(e){toast(e.name==='AbortError'?'Folder selection cancelled.':'Folder error: '+e.message,1)}}
+async function doExport(){closeModal();const files=EXD.map(d=>({n:d+'.txt',t:dayTxt(d)}));
+ if('showDirectoryPicker' in window){try{const dir=await getDir();for(const f of files){const h=await dir.getFileHandle(f.n,{create:true}),w=await h.createWritable();await w.write(f.t);await w.close()}toast(`Saved ${files.length} file(s) in the "Shop Bills" folder.`);return}
+  catch(e){if(e.name==='AbortError')return toast('Folder selection cancelled. Nothing saved.',1);toast('Folder save failed ('+e.message+'). Downloading instead.',1);try{await idbSet('dir',null)}catch(_){}}}
+ for(const f of files){try{const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([f.t],{type:'text/plain;charset=utf-8'}));a.download=f.n;document.body.appendChild(a);a.click();a.remove();await new Promise(r=>setTimeout(r,300))}catch(e){toast('Download failed: '+e.message,1)}}}
+
+/* ---------- SETUP ---------- */
+function parseShops(txt){txt=txt.trim();if(!txt)return[];let rows=[];
+ if(txt[0]==='['||txt[0]==='{'){const j=JSON.parse(txt);rows=Array.isArray(j)?j:(j.shops||[])}
+ else{const L=txt.split(/\r?\n/).filter(x=>x.trim()),sp=l=>{const o=[];let c='',q=0;for(const ch of l){if(ch==='"')q=!q;else if(ch===','&&!q){o.push(c);c=''}else c+=ch}o.push(c);return o.map(s=>s.trim())},h=sp(L[0]).map(s=>s.toLowerCase()),hh=h.some(x=>/lat|name|shop/.test(x)),ix=(re,d)=>{const i=h.findIndex(x=>re.test(x));return hh&&i>=0?i:d};
+  const ni=ix(/name|shop/,0),la=ix(/lat/,1),lo=ix(/lon|lng/,2),pl=ix(/place|loc|area/,3);(hh?L.slice(1):L).forEach(l=>{const c=sp(l);rows.push({name:c[ni],lat:c[la],lng:c[lo],place:c[pl]})})}
+ return rows.map(r=>({name:String(r.name??r.shop??r['shop name']??'').trim(),lat:parseFloat(r.lat??r.latitude),lng:parseFloat(r.lng??r.lon??r.longitude),place:String(r.place??r.location??'').trim()})).filter(r=>r.name&&isFinite(r.lat)&&isFinite(r.lng)&&Math.abs(r.lat)<=90&&Math.abs(r.lng)<=180)}
+function mergeShops(rows){if(!rows.length)return toast('No valid shops found. Need name, latitude, longitude, place.',1);const l=shops();rows.forEach(r=>{const i=l.findIndex(s=>s.name.toLowerCase()===r.name.toLowerCase());i>=0?l[i]=r:l.push(r)});if(S('shops',l)){toast(`Imported ${rows.length} shop(s).`);viewSetup()}}
+function impText(){try{mergeShops(parseShops($('imp').value))}catch(e){toast('Could not read that text: '+e.message,1)}}
+async function impFile(inp){try{const f=inp.files[0];if(!f)return;mergeShops(parseShops(await f.text()))}catch(e){toast('Could not read file: '+e.message,1)}}
+async function useGps(){try{const p=await getPos();$('ml').value=p.coords.latitude.toFixed(6);$('mg').value=p.coords.longitude.toFixed(6)}catch(e){toast(e.m||e.message,1)}}
+function addShop(){const r={name:$('mn').value.trim(),lat:parseFloat($('ml').value),lng:parseFloat($('mg').value),place:$('mp').value.trim()};if(!r.name||!isFinite(r.lat)||!isFinite(r.lng))return toast('Enter shop name, latitude and longitude.',1);mergeShops([r])}
+function delShop(i){const l=shops();l.splice(i,1);S('shops',l);viewSetup()}
+function addItem(){const n=$('ni').value.trim().toLowerCase();if(!n)return;const c=cat();c[n]=c[n]||0;if(S('catalog',c))viewSetup()}
+function delItem2(n){const c=cat();delete c[n];S('catalog',c);viewSetup()}
+function setRad(v){const r=+v;if(!(r>0))return toast('Radius must be above 0.',1);S('cfg',{...cfg(),radius:r});toast('Radius saved.')}
+function viewSetup(){const sh=shops(),c=cat();$('v').innerHTML=`
+<div class="card"><b>Detection radius (m)</b><input type="number" min="10" value="${cfg().radius}" onchange="setRad(this.value)"></div>
+<div class="card"><b>Import shops (CSV or JSON)</b><div class="m">Columns: shop name, latitude, longitude, place</div><input type="file" accept=".csv,.json,.txt" onchange="impFile(this)"><textarea id="imp" rows="3" placeholder="Paste CSV or JSON here"></textarea><button class="btn w-full" onclick="impText()">Import pasted text</button></div>
+<div class="card"><b>Add a shop</b><input id="mn" placeholder="Shop name"><div class="grid grid-cols-2 gap-2"><input id="ml" placeholder="Latitude" inputmode="decimal"><input id="mg" placeholder="Longitude" inputmode="decimal"></div><input id="mp" placeholder="Place"><div class="grid grid-cols-2 gap-2"><button class="btn g" onclick="useGps()">Use GPS</button><button class="btn" onclick="addShop()">Add</button></div></div>
+<div class="card"><b>Saved shops (${sh.length})</b>${sh.map((s,i)=>`<div class="flex justify-between items-center py-1 border-t" style="border-color:var(--b)"><span class="min-w-0 break-words">${esc(s.name)}<div class="m">${esc(s.place)} · ${s.lat.toFixed(4)}, ${s.lng.toFixed(4)}</div></span><button class="p-3" onclick="delShop(${i})" aria-label="Delete shop">✕</button></div>`).join('')||'<div class="m">None yet.</div>'}</div>
+<div class="card"><b>Item catalog</b><div class="flex gap-2"><input id="ni" placeholder="New item"><button class="btn" onclick="addItem()">Add</button></div>${Object.entries(c).map(([n,p])=>`<div class="flex justify-between items-center py-1 border-t" style="border-color:var(--b)"><span>${esc(n)} <span class="m">${p?R(p):''}</span></span><button class="p-3" onclick="delItem2(decodeURIComponent('${encodeURIComponent(n)}'))">✕</button></div>`).join('')}</div>
+<div class="card"><b>Export folder</b><div class="m">${'showDirectoryPicker' in window?'Pick a parent folder once; the app uses a "Shop Bills" folder inside it.':'Folder access is not supported in this browser; exports download as normal .txt files.'}</div>${'showDirectoryPicker' in window?'<button class="btn g w-full mt-2" onclick="pickFolder()">Choose / change folder</button>':''}</div>
+<div class="card"><b>Change password</b><input id="cp0" type="password" placeholder="Current password" autocomplete="current-password"><input id="cp1" type="password" placeholder="New password (min 8)" autocomplete="new-password"><input id="cp2" type="password" placeholder="Confirm new password" autocomplete="new-password"><button class="btn w-full" onclick="chPw()">Change password</button></div>
+<button class="btn r w-full" onclick="logout()">Log out (${esc(U.email)})</button>`}
+init();
+</script></body></html>
