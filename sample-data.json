@@ -1,0 +1,24 @@
+{
+  "_readme": "Sample test data. daysAgo = how many days before today. Load from Setup → Backup & export → 'Load sample test data' (use a TEST account). Bill numbers, previous dues and balances are recalculated on import.",
+  "stock": [
+    { "itemId": "item_kobari", "daysAgo": 2, "loaded": 200, "damaged": 2 },
+    { "itemId": "item_kobari", "daysAgo": 1, "loaded": 150, "damaged": 0 },
+    { "itemId": "item_kobari", "daysAgo": 0, "loaded": 150, "damaged": 1 }
+  ],
+  "items": [
+    { "id": "item_kobari", "name": "Kobari Kaya (కొబ్బరికాయ)", "price": 25, "unit": "pcs", "openingStock": 10, "active": true }
+  ],
+  "shops": [
+    { "id": "shop_10", "name": "Shop 10", "villageId": "v_kangti", "openingBalance": 19200, "active": true }
+  ],
+  "bills": [
+    { "id": "sample_b1", "daysAgo": 2, "villageId": "v_sirgapoor", "shopId": "shop_1", "villageName": "Sirgapoor", "shopName": "Shop 1",
+      "items": [ { "itemId": "item_kobari", "name": "Kobari Kaya (కొబ్బరికాయ)", "qty": 40, "rate": 25 } ], "cash": 600, "upi": 400, "upiRef": "UTR100200300", "notes": "Sample bill" },
+    { "id": "sample_b2", "daysAgo": 1, "villageId": "v_sirgapoor", "shopId": "shop_1", "villageName": "Sirgapoor", "shopName": "Shop 1",
+      "items": [ { "itemId": "item_kobari", "name": "Kobari Kaya (కొబ్బరికాయ)", "qty": 20, "rate": 25 } ], "cash": 0, "upi": 0, "oldPaidCash": 0, "oldPaidUpi": 0 },
+    { "id": "sample_b3", "daysAgo": 0, "villageId": "v_kangti", "shopId": "shop_10", "villageName": "Kangti", "shopName": "Shop 10",
+      "items": [ { "itemId": "item_kobari", "name": "Kobari Kaya (కొబ్బరికాయ)", "qty": 256, "rate": 25 } ], "cash": 0, "upi": 0, "oldPaidCash": 5000, "oldPaidUpi": 0, "notes": "Acceptance example: 19,200 old + 6,400 today − 5,000 old paid = 20,600" },
+    { "id": "sample_b4", "daysAgo": 0, "villageId": "v_tadkal", "shopId": "shop_6", "villageName": "Tadkal", "shopName": "Shop 6",
+      "items": [ { "itemId": "item_kobari", "name": "Kobari Kaya (కొబ్బరికాయ)", "qty": 100, "rate": 25 } ], "cash": 1500, "upi": 500, "upiRef": "UTR555" }
+  ]
+}
