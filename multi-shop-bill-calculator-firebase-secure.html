@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Multi-Shop Bill, Expense & Travel Tracker</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+<style>
+  .tab-active{background:#2563eb;color:#fff}.hidden{display:none}
+  #map{height:380px;border-radius:.75rem}
+  .suggestion{cursor:pointer}.suggestion:hover{background:#e0e7ff}
+</style>
+</head>
+<body class="bg-slate-100 min-h-screen text-slate-800">
+
+<div id="authScreen" class="min-h-screen flex items-center justify-center p-4">
+  <div class="bg-white w-full max-w-md rounded-2xl shadow-xl p-6">
+    <h1 class="text-2xl font-bold text-center text-blue-700">Multi-Shop Bill Tracker</h1>
+    <p class="text-center text-sm text-slate-500 mb-6">Sign in to access billing, inventory & travel</p>
+    <div class="flex gap-2 mb-4">
+      <button id="tabLogin" class="flex-1 py-2 rounded-lg font-semibold tab-active">Login</button>
+      <button id="tabSignup" class="flex-1 py-2 rounded-lg font-semibold bg-slate-200">Sign Up</button>
+    </div>
+    <form id="authForm" class="space-y-3">
+      <input id="authEmail" type="email" required placeholder="Email" class="w-full border rounded-lg px-3 py-2">
+      <input id="authPass" type="password" required minlength="6" placeholder="Password (at least 6 characters)" class="w-full border rounded-lg px-3 py-2">
+      <p id="authError" class="text-red-600 text-sm hidden"></p>
+      <button id="authSubmit" class="w-full bg-blue-600 text-white py-2 rounded-lg font-semibold">Login</button><button type="button" id="googleAuthBtn" class="w-full border py-2 rounded-lg font-semibold">Continue with Google</button><button type="button" id="forgotBtn" class="w-full text-blue-700 py-2">Forgot Password?</button><button type="button" id="demoBtn" class="w-full bg-emerald-600 text-white py-2 rounded-lg font-semibold">Open Demo</button><p id="authNotice" class="text-xs text-slate-500">Sign in securely with Firebase. Your app data syncs to your account.</p>
+    </form>
+  </div>
+</div>
+
+<div id="app" class="hidden max-w-5xl mx-auto p-3 pb-24">
+  <header class="flex items-center justify-between mb-4">
+    <h1 class="text-xl font-bold text-blue-700">Multi-Shop Bill & Travel Tracker</h1>
+    <button id="logoutBtn" class="text-sm bg-slate-200 px-3 py-1 rounded-lg">Logout</button>
+  </header>
+
+  <nav class="flex flex-wrap gap-2 mb-4">
+    <button data-tab="billing" class="tabBtn px-4 py-2 rounded-lg font-semibold tab-active">Create Bill</button>
+    <button data-tab="orders" class="tabBtn px-4 py-2 rounded-lg font-semibold bg-slate-200">Orders & Total</button>
+    <button data-tab="inventory" class="tabBtn px-4 py-2 rounded-lg font-semibold bg-slate-200">Vehicle Inventory</button>
+    <button data-tab="travel" class="tabBtn px-4 py-2 rounded-lg font-semibold bg-slate-200">Travel Route</button>
+    <button data-tab="shops" class="tabBtn px-4 py-2 rounded-lg font-semibold bg-slate-200">Shops & Import</button>
+  </nav>
+
+  <section id="tab-billing" class="space-y-4">
+    <div class="bg-white rounded-2xl shadow p-4 space-y-3">
+      <h2 class="font-bold text-lg">Shop & Location</h2>
+      <div class="grid sm:grid-cols-2 gap-3">
+        <div><label class="text-sm font-medium">Saved Shop (Dropdown)</label>
+          <select id="shopSelect" class="w-full border rounded-lg px-3 py-2"><option value="">-- Select saved shop --</option></select></div>
+        <div><label class="text-sm font-medium">Shop Name</label><input id="shopName" class="w-full border rounded-lg px-3 py-2"></div>
+        <div><label class="text-sm font-medium">Place / City</label><input id="place" class="w-full border rounded-lg px-3 py-2"></div>
+        <div><label class="text-sm font-medium">Date</label><input id="billDate" type="date" class="w-full border rounded-lg px-3 py-2"></div>
+      </div>
+      <div class="flex flex-wrap gap-2">
+        <button id="detectShopBtn" class="bg-blue-600 text-white px-4 py-2 rounded-lg font-semibold">Detect Shop</button>
+        <button id="getLocationBtn" class="bg-slate-700 text-white px-4 py-2 rounded-lg font-semibold">Get Location Only</button>
+        <button id="saveShopSpotBtn" class="bg-emerald-600 text-white px-4 py-2 rounded-lg font-semibold">Save GPS as New Shop</button>
+      </div>
+      <p id="locStatus" class="text-sm text-slate-500"></p>
+      <div class="grid sm:grid-cols-2 gap-3">
+        <div><label class="text-sm font-medium">Latitude</label><input id="lat" class="w-full border rounded-lg px-3 py-2"></div>
+        <div><label class="text-sm font-medium">Longitude</label><input id="lng" class="w-full border rounded-lg px-3 py-2"></div>
+      </div>
+    </div>
+
+    <div class="bg-white rounded-2xl shadow p-4 space-y-3">
+      <h2 class="font-bold text-lg">Items</h2>
+      <div id="itemRows" class="space-y-3"></div>
+      <button id="addItemBtn" class="bg-blue-100 text-blue-700 px-4 py-2 rounded-lg font-semibold">+ Add Item</button>
+      <div class="flex justify-between text-lg font-bold border-t pt-3"><span>Shop Subtotal</span><span id="shopSubtotal">₹0.00</span></div>
+    </div>
+
+    <div class="bg-white rounded-2xl shadow p-4 space-y-3">
+      <h2 class="font-bold text-lg">Payment Breakup</h2>
+      <div class="grid sm:grid-cols-2 gap-3"><div><label class="text-sm font-medium">Old Due (₹)</label><input id="oldDuePaid" type="number" min="0" step="0.01" value="0" class="w-full border rounded-lg px-3 py-2"></div><div class="rounded-xl border-2 border-blue-200 bg-blue-50 p-3"><label class="text-sm font-semibold text-blue-800">Subtotal (₹) — Items Total + Old Due</label><div id="paymentSubtotal" class="text-2xl font-extrabold text-blue-800">₹0.00</div></div><div><label class="text-sm font-medium">Cash Received (₹)</label><input id="cashAmount" type="number" min="0" step="0.01" value="0" class="w-full border rounded-lg px-3 py-2"></div><div><label class="text-sm font-medium">UPI Received (₹)</label><input id="upiAmount" type="number" min="0" step="0.01" value="0" class="w-full border rounded-lg px-3 py-2"></div><div><label class="text-sm font-medium">Balance Due (₹)</label><input id="amountDue" readonly class="w-full border rounded-lg px-3 py-2 bg-slate-100 font-bold"></div></div>
+      <div class="flex justify-between text-sm font-semibold">
+        <span>Total Paid: <span id="totalPaid">₹0.00</span></span><span>Bill Total: <span id="billTotal">₹0.00</span></span></div>
+      <button id="openQrBtn" class="bg-violet-600 text-white px-4 py-2 rounded-lg font-semibold">Scan & Pay QR</button>
+      <input id="upiRef" class="w-full border rounded-lg px-3 py-2" placeholder="UPI Transaction / Verification Reference">
+    </div>
+    <button id="saveOrderBtn" class="w-full bg-emerald-600 text-white py-3 rounded-lg font-bold">Save Order for Shop</button>
+  </section>
+
+  <section id="tab-orders" class="hidden space-y-4">
+    <div class="bg-blue-600 text-white rounded-2xl p-5 flex flex-wrap justify-between items-center gap-3">
+      <div><p class="text-sm opacity-80">Grand Total — All Shops</p><p id="grandTotal" class="text-3xl font-bold">₹0.00</p></div>
+      <div class="flex flex-wrap gap-2"><button id="exportTxtBtn" class="bg-white text-blue-700 px-4 py-2 rounded-lg font-bold">Download .txt Bill</button><button id="exportBoxBtn" class="bg-orange-600 text-white px-4 py-2 rounded-lg font-bold">Download Box Bill (.html)</button></div>
+    </div>
+    <div id="ordersList" class="space-y-4"></div>
+  </section>
+
+  <section id="tab-inventory" class="hidden space-y-4">
+    <div class="bg-white rounded-2xl shadow p-4 space-y-3">
+      <h2 class="font-bold text-lg">Vehicle Stock Entry</h2><label class="text-sm">Stock date <input id="invDate" type="date" class="border rounded-lg px-3 py-2 w-full"></label>
+      <div class="grid sm:grid-cols-4 gap-2">
+        <input id="invItem" placeholder="Item name" class="border rounded-lg px-3 py-2">
+        <input id="invQuality" placeholder="Quality / Grade" class="border rounded-lg px-3 py-2">
+        <input id="invQty" type="number" min="1" placeholder="Initial qty" class="border rounded-lg px-3 py-2">
+        <button id="addInvBtn" class="bg-blue-600 text-white rounded-lg font-semibold">Add Row</button><button id="saveStockBtn" class="bg-emerald-600 text-white rounded-lg font-semibold">Save Stock</button>
+      </div>
+    </div>
+    <div id="invStats" class="grid grid-cols-3 gap-3"></div>
+    <div id="invList" class="space-y-3"></div>
+  </section>
+
+  <section id="tab-travel" class="hidden space-y-4">
+    <div class="bg-white rounded-2xl shadow p-4 space-y-3">
+      <h2 class="font-bold text-lg">Live Trip Recording</h2>
+      <div class="flex flex-wrap gap-2">
+        <button id="startTrip" class="bg-emerald-600 text-white px-4 py-2 rounded-lg font-semibold">Start Trip</button>
+        <button id="pauseTrip" class="bg-amber-500 text-white px-4 py-2 rounded-lg font-semibold">Pause Trip</button><button id="resumeTrip" class="bg-blue-600 text-white px-4 py-2 rounded-lg font-semibold">Resume Trip</button>
+        <button id="completeTrip" class="bg-red-600 text-white px-4 py-2 rounded-lg font-semibold">Complete Trip</button>
+        <button id="clearTrip" class="bg-slate-200 px-4 py-2 rounded-lg font-semibold">Clear</button>
+      </div>
+      <p id="tripStatus" class="text-sm text-slate-600">Trip not started.</p><div id="tripInfo" class="grid grid-cols-3 gap-2 text-center"></div><h3 class="font-bold">Trip History</h3><div id="tripHistory" class="space-y-2"></div><p class="text-xs text-slate-500">GPS tracking usually requires HTTPS (or localhost) and location permission.</p>
+      <div id="map"></div>
+      <button id="tripTxtBtn" class="bg-blue-600 text-white px-4 py-2 rounded-lg font-semibold">Download Trip .txt</button>
+    </div>
+  </section>
+
+  <section id="tab-shops" class="hidden space-y-4">
+    <div class="bg-white rounded-2xl shadow p-4 space-y-3">
+      <h2 class="font-bold text-lg">Shop Database</h2>
+      <input id="shopFile" type="file" accept=".csv,.json" class="border rounded-lg px-3 py-2 w-full">
+      <textarea id="shopPaste" rows="4" class="w-full border rounded-lg px-3 py-2" placeholder="Paste CSV: shop name,latitude,longitude,place"></textarea>
+      <button id="importShopsBtn" class="bg-blue-600 text-white px-4 py-2 rounded-lg font-semibold">Import Shops</button>
+      <div id="shopDbList" class="text-sm space-y-1"></div>
+    </div>
+  </section>
+</div>
+
+<div id="qrModal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50">
+  <div class="bg-white rounded-2xl p-5 max-w-sm w-full space-y-3">
+    <h3 class="font-bold text-lg">Scan & Pay QR</h3>
+    <p class="text-sm text-slate-500">Choose the UPI QR image from your phone folder.</p>
+    <input id="qrImageInput" type="file" accept="image/*" class="w-full border rounded-lg px-3 py-2">
+    <img id="qrPreview" class="w-full rounded-lg hidden">
+    <p id="qrResult" class="text-sm font-semibold text-emerald-700 hidden"></p>
+    <input id="qrRef" class="w-full border rounded-lg px-3 py-2" placeholder="Transaction reference (optional)">
+    <div class="flex gap-2">
+      <button id="qrConfirm" class="flex-1 bg-emerald-600 text-white py-2 rounded-lg font-semibold">Confirm</button>
+      <button id="qrClose" class="flex-1 bg-slate-200 py-2 rounded-lg font-semibold">Close</button>
+    </div>
+  </div>
+</div>
+
+<div id="exportModal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50">
+  <div class="bg-white rounded-2xl p-5 max-w-md w-full space-y-3">
+    <h3 class="font-bold text-lg">Export Summary</h3>
+    <pre id="exportSummary" class="bg-slate-100 p-3 rounded-lg text-xs overflow-auto max-h-64"></pre>
+    <div class="flex gap-2">
+      <button id="exportConfirm" class="flex-1 bg-blue-600 text-white py-2 rounded-lg font-semibold">Download .txt</button>
+      <button id="exportClose" class="flex-1 bg-slate-200 py-2 rounded-lg font-semibold">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
+import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, GoogleAuthProvider, signInWithPopup, sendPasswordResetEmail, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+import { getFirestore, doc, getDoc, setDoc } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
+const firebaseConfig = {
+  apiKey: "AIzaSyDukRh97hVuAzTYHEYnYsHR1wpXRRQGxrU",
+  authDomain: "multi-shop-billing.firebaseapp.com",
+  projectId: "multi-shop-billing",
+  storageBucket: "multi-shop-billing.firebasestorage.app",
+  messagingSenderId: "512775994595",
+  appId: "1:512775994595:web:192fb5bd99dc558c5f59d6",
+  measurementId: "G-LX4PSBJ1WN"
+};
+const firebaseApp = initializeApp(firebaseConfig);
+const auth = getAuth(firebaseApp);
+const db = getFirestore(firebaseApp);
+let currentUser = null, cloudReady = false, saveTimer = null;
+const appKeys = ['ms_shops','ms_catalog','ms_inventory','ms_orders','ms_trips'];
+const LS={get(k,d){try{return JSON.parse(localStorage.getItem(k))??d}catch(e){return d}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v));}catch(e){alert('Could not save data in this browser. Check storage permissions or available space.');}}};
+let shops=LS.get('ms_shops',[]);
+let catalog=LS.get('ms_catalog',{'kobari kaya':{price:0,quality:''},'match box':{price:0,quality:''},'salt':{price:0,quality:''},'water glass':{price:0,quality:''},'mini jambo':{price:0,quality:''},'jambo':{price:0,quality:''}});
+let inventory=LS.get('ms_inventory',[]),ordersByDate=LS.get('ms_orders',{}),trips=LS.get('ms_trips',[]);
+const RADIUS=150,$=id=>document.getElementById(id);
+const originalLSSet=LS.set.bind(LS);LS.set=(k,v)=>{originalLSSet(k,v);if(appKeys.includes(k))scheduleCloudSave();};
+
+function appDataSnapshot(){const out={};for(const k of appKeys){out[k]=LS.get(k,k==='ms_catalog'?{'kobari kaya':{price:0,quality:''},'match box':{price:0,quality:''},'salt':{price:0,quality:''},'water glass':{price:0,quality:''},'mini jambo':{price:0,quality:''},'jambo':{price:0,quality:''}}:k==='ms_orders'?{}:[]);}return out;}
+function scheduleCloudSave(){if(!currentUser||!cloudReady)return;clearTimeout(saveTimer);saveTimer=setTimeout(async()=>{try{await setDoc(doc(db,'users',currentUser.uid,'appData','main'),appDataSnapshot());}catch(err){console.error(err);showAuthError('Cloud sync failed. Check your connection and Firestore rules.');}},700);}
+let authMode='login';
+function showAuthError(m){const e=$('authError');e.textContent=m;e.classList.remove('hidden');}
+function clearAuthError(){const e=$('authError');e.textContent='';e.classList.add('hidden');}
+$('tabLogin').onclick=()=>{authMode='login';$('authSubmit').textContent='Login';$('tabLogin').classList.add('tab-active');$('tabSignup').classList.remove('tab-active');clearAuthError();};
+$('tabSignup').onclick=()=>{authMode='signup';$('authSubmit').textContent='Sign Up';$('tabSignup').classList.add('tab-active');$('tabLogin').classList.remove('tab-active');clearAuthError();};
+$('authForm').onsubmit=async e=>{e.preventDefault();clearAuthError();const email=$('authEmail').value.trim(),pass=$('authPass').value;$('authSubmit').disabled=true;$('authSubmit').textContent='Please wait…';try{if(authMode==='signup'){if(pass.length<6)throw new Error('Use a password with at least 6 characters.');await createUserWithEmailAndPassword(auth,email,pass);}else{await signInWithEmailAndPassword(auth,email,pass);}}catch(err){showAuthError(authMessage(err));}finally{$('authSubmit').disabled=false;$('authSubmit').textContent=authMode==='signup'?'Sign Up':'Login';}};
+function authMessage(err){const map={'auth/email-already-in-use':'An account already exists for this email.','auth/invalid-email':'Enter a valid email address.','auth/weak-password':'Use a password with at least 6 characters.','auth/invalid-credential':'Email or password is incorrect.','auth/user-not-found':'No account found. Please sign up first.','auth/popup-closed-by-user':'Google sign-in was cancelled.','auth/unauthorized-domain':'This website domain is not authorized in Firebase Authentication settings.','auth/network-request-failed':'Network error. Check your internet connection.'};return map[err.code]||err.message||'Authentication failed. Please try again.';}
+$('googleAuthBtn').onclick=async()=>{clearAuthError();try{await signInWithPopup(auth,new GoogleAuthProvider());}catch(err){showAuthError(authMessage(err));}};
+$('forgotBtn').onclick=async()=>{clearAuthError();const email=$('authEmail').value.trim();if(!email){showAuthError('Enter your email address first, then tap Forgot Password.');return;}try{await sendPasswordResetEmail(auth,email);showAuthError('Password reset email sent. Check your inbox and spam folder.');}catch(err){showAuthError(authMessage(err));}};
+$('logoutBtn').onclick=async()=>{try{await signOut(auth);}catch(err){showAuthError(authMessage(err));}};
+$('demoBtn').onclick=()=>showAuthError('Demo mode is disabled in this secure build. Please sign in or create an account.');
+function enterApp(){$('authScreen').classList.add('hidden');$('app').classList.remove('hidden');renderAll();}
+async function loadUserData(user){currentUser=user;cloudReady=false;try{const snap=await getDoc(doc(db,'users',user.uid,'appData','main'));const data=snap.exists()?snap.data():{};for(const k of appKeys){if(Object.prototype.hasOwnProperty.call(data,k))LS.set(k,data[k]);else LS.set(k,k==='ms_catalog'?{'kobari kaya':{price:0,quality:''},'match box':{price:0,quality:''},'salt':{price:0,quality:''},'water glass':{price:0,quality:''},'mini jambo':{price:0,quality:''},'jambo':{price:0,quality:''}}:k==='ms_orders'?{}:[]);}shops=LS.get('ms_shops',[]);catalog=LS.get('ms_catalog',{'kobari kaya':{price:0,quality:''},'match box':{price:0,quality:''},'salt':{price:0,quality:''},'water glass':{price:0,quality:''},'mini jambo':{price:0,quality:''},'jambo':{price:0,quality:''}});inventory=LS.get('ms_inventory',[]);ordersByDate=LS.get('ms_orders',{});trips=LS.get('ms_trips',[]);cloudReady=true;if(!snap.exists())await setDoc(doc(db,'users',user.uid,'appData','main'),appDataSnapshot());enterApp();}catch(err){console.error(err);showAuthError('Signed in, but cloud data could not load. Check that Firestore rules are published.');await signOut(auth).catch(()=>{});}}
+onAuthStateChanged(auth,user=>{if(user){loadUserData(user);}else{currentUser=null;cloudReady=false;$('app').classList.add('hidden');$('authScreen').classList.remove('hidden');}});
+document.querySelectorAll('.tabBtn').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('.tabBtn').forEach(x=>{x.classList.remove('tab-active');x.classList.add('bg-slate-200')});
+  b.classList.add('tab-active');b.classList.remove('bg-slate-200');
+  ['billing','orders','inventory','travel','shops'].forEach(t=>$('tab-'+t).classList.toggle('hidden',t!==b.dataset.tab));
+  if(b.dataset.tab==='travel'&&map)setTimeout(()=>map.invalidateSize(),100);});
+
+function haversine(a,b,c,d){const R=6371000,r=x=>x*Math.PI/180,dLa=r(c-a),dLo=r(d-b);
+  const h=Math.sin(dLa/2)**2+Math.cos(r(a))*Math.cos(r(c))*Math.sin(dLo/2)**2;return 2*R*Math.asin(Math.sqrt(h));}
+function setLoc(lat,lng){$('lat').value=lat.toFixed(6);$('lng').value=lng.toFixed(6);}
+async function reverseGeocode(lat,lng){try{const r=await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`);const j=await r.json();const a=j.address||{};return a.city||a.town||a.village||a.suburb||a.county||j.display_name||'';}catch(e){return '';}}
+function findNearbyShop(lat,lng){return shops.find(s=>haversine(lat,lng,s.latitude,s.longitude)<=RADIUS);}
+function getLocation(){if(!navigator.geolocation){$('locStatus').textContent='Geolocation not supported.';return;}
+  $('locStatus').textContent='Fetching location…';
+  navigator.geolocation.getCurrentPosition(async pos=>{const{latitude:lat,longitude:lng}=pos.coords;setLoc(lat,lng);
+    const near=findNearbyShop(lat,lng);
+    if(near){$('shopName').value=near.name;$('place').value=near.place;$('locStatus').textContent=`Matched: ${near.name}`;}
+    else{const p=await reverseGeocode(lat,lng);if(p&&!$('place').value)$('place').value=p;$('locStatus').textContent='No shop within 150 m. Enter manually.';}
+  },err=>{$('locStatus').textContent='Location error: '+(err.message||'permission denied')+'. Enter manually.';},{enableHighAccuracy:true,timeout:10000});}
+$('getLocationBtn').onclick=getLocation;$('detectShopBtn').onclick=getLocation;
+$('saveShopSpotBtn').onclick=()=>{const lat=parseFloat($('lat').value),lng=parseFloat($('lng').value),name=$('shopName').value.trim(),place=$('place').value.trim();
+  if(!name||isNaN(lat)||isNaN(lng)){alert('Enter shop name and detect location.');return;}
+  shops.push({name,latitude:lat,longitude:lng,place});LS.set('ms_shops',shops);renderShops();renderShopDropdown();alert('Shop saved.');};
+
+function renderShopDropdown(){const sel=$('shopSelect');sel.innerHTML='<option value="">-- Select saved shop --</option>';
+  shops.forEach((s,i)=>{const o=document.createElement('option');o.value=i;o.textContent=`${s.name} — ${s.place}`;sel.appendChild(o);});}
+$('shopSelect').onchange=()=>{const s=shops[$('shopSelect').value];if(!s)return;$('shopName').value=s.name;$('place').value=s.place;$('lat').value=s.latitude;$('lng').value=s.longitude;};
+
+let rowId=0;
+function addItemRow(item='',qty=1,price=0,quality=''){rowId++;const div=document.createElement('div');
+  div.className='grid grid-cols-2 sm:grid-cols-6 gap-2 items-end border rounded-xl p-3';div.dataset.row=rowId;
+  div.innerHTML=`<div class="col-span-2 sm:col-span-2 relative"><label class="text-xs font-medium">Item</label>
+    <input class="itemName w-full border rounded-lg px-2 py-2" value="${item}" autocomplete="off">
+    <div class="suggest absolute z-20 bg-white border rounded-lg shadow w-full max-h-48 overflow-auto hidden"></div></div>
+    <div><label class="text-xs font-medium">Qty</label><input type="number" min="0" class="qty w-full border rounded-lg px-2 py-2" value="${qty}"></div>
+    <div><label class="text-xs font-medium">Unit Price</label><input type="number" min="0" step="0.01" class="price w-full border rounded-lg px-2 py-2" value="${price}"></div>
+    <div><label class="text-xs font-medium">Quality</label><input class="quality w-full border rounded-lg px-2 py-2" value="${quality}"></div>
+    <div class="flex items-center justify-between gap-2"><div><label class="text-xs font-medium">Total</label><div class="rowTotal font-bold">₹0.00</div></div>
+    <button class="delRow text-red-600 font-bold px-2">✕</button></div>`;
+  $('itemRows').appendChild(div);
+  const nameInput=div.querySelector('.itemName'),suggest=div.querySelector('.suggest');
+  nameInput.addEventListener('input',()=>{const q=nameInput.value.toLowerCase();suggest.innerHTML='';suggest.classList.add('hidden');
+    if(!q)return;Object.keys(catalog).filter(k=>k.includes(q)).slice(0,8).forEach(k=>{
+      const d=document.createElement('div');d.className='suggestion px-3 py-2 text-sm';d.textContent=`${k} — ₹${catalog[k].price||0}`;
+      d.onclick=()=>{nameInput.value=k;div.querySelector('.price').value=catalog[k].price||0;div.querySelector('.quality').value=catalog[k].quality||'';suggest.classList.add('hidden');calc();};
+      suggest.appendChild(d);});
+    if(suggest.children.length)suggest.classList.remove('hidden');});
+  nameInput.addEventListener('blur',()=>setTimeout(()=>suggest.classList.add('hidden'),150));
+  div.querySelector('.delRow').onclick=()=>{div.remove();calc();};
+  div.querySelectorAll('input').forEach(i=>i.addEventListener('input',calc));calc();}
+$('addItemBtn').onclick=()=>addItemRow();
+function calc(){let itemsTotal=0;document.querySelectorAll('#itemRows [data-row]').forEach(r=>{const q=Math.max(0,+r.querySelector('.qty').value||0),p=Math.max(0,+r.querySelector('.price').value||0),t=q*p;r.querySelector('.rowTotal').textContent='₹'+t.toFixed(2);itemsTotal+=t;});$('shopSubtotal').textContent='₹'+itemsTotal.toFixed(2);$('billTotal').textContent='₹'+itemsTotal.toFixed(2);const oldDue=Math.max(0,+$('oldDuePaid').value||0),subtotal=itemsTotal+oldDue,cash=Math.max(0,+$('cashAmount').value||0),upi=Math.max(0,+$('upiAmount').value||0);$('paymentSubtotal').textContent='₹'+subtotal.toFixed(2);$('totalPaid').textContent='₹'+(cash+upi).toFixed(2);$('amountDue').value='₹'+Math.max(0,subtotal-cash-upi).toFixed(2);return itemsTotal;}
+['cashAmount','upiAmount','oldDuePaid'].forEach(id=>$(id).addEventListener('input',calc));
+
+$('openQrBtn').onclick=()=>{$('qrModal').classList.remove('hidden');$('qrResult').classList.add('hidden');$('qrPreview').classList.add('hidden');};
+$('qrClose').onclick=()=>$('qrModal').classList.add('hidden');
+$('qrImageInput').onchange=e=>{const f=e.target.files[0];if(!f)return;const img=new Image();
+  img.onload=()=>{const c=document.createElement('canvas');c.width=img.width;c.height=img.height;
+    const ctx=c.getContext('2d');ctx.drawImage(img,0,0);
+    const data=ctx.getImageData(0,0,c.width,c.height);const code=(typeof jsQR==='function')?jsQR(data.data,c.width,c.height):null;
+    $('qrPreview').src=URL.createObjectURL(f);$('qrPreview').classList.remove('hidden');
+    if(code&&code.data){$('qrResult').textContent='QR detected: '+code.data;$('qrResult').classList.remove('hidden');$('upiRef').value=code.data;}
+    else{$('qrResult').textContent='QR not detected. Enter reference manually.';$('qrResult').classList.remove('hidden');}};
+  img.src=URL.createObjectURL(f);};
+$('qrConfirm').onclick=()=>{if(!$('upiRef').value.trim())$('upiRef').value='UPI-SCAN-'+Date.now();
+  if(!(+$('upiAmount').value)){$('upiAmount').value=Math.max(0,(+$('billTotal').textContent.replace('₹',''))-(+$('cashAmount').value||0));}
+  calc();$('qrClose').click();};
+
+$('saveOrderBtn').onclick=()=>{const items=[];
+  document.querySelectorAll('#itemRows [data-row]').forEach(r=>{const name=r.querySelector('.itemName').value.trim(),qty=+r.querySelector('.qty').value||0,price=+r.querySelector('.price').value||0;
+    if(name&&qty>0)items.push({name,qty,price,quality:r.querySelector('.quality').value.trim(),total:qty*price});});
+  if(!items.length){alert('Add at least one item.');return;}
+  const total=items.reduce((s,i)=>s+i.total,0),cash=Math.max(0,+$('cashAmount').value||0),upi=Math.max(0,+$('upiAmount').value||0),oldDue=Math.max(0,+$('oldDuePaid').value||0),subtotal=total+oldDue;
+  const order={id:Date.now(),date:$('billDate').value||new Date().toISOString().slice(0,10),createdAt:new Date().toISOString(),place:$('place').value.trim()||'Unknown',shop:$('shopName').value.trim()||'Unnamed Shop',lat:$('lat').value,lng:$('lng').value,items,total,itemsTotal:total,cash,upi,oldDue,subtotal,totalReceived:cash+upi,oldDuePaid:oldDue,due:Math.max(0,subtotal-cash-upi),upiRef:$('upiRef').value.trim()};
+  items.forEach(i=>{const key=i.name.toLowerCase();catalog[key]=catalog[key]||{price:0,quality:''};
+    if(i.price)catalog[key].price=i.price;if(i.quality)catalog[key].quality=i.quality;});
+  LS.set('ms_catalog',catalog);LS.set('ms_inventory',inventory);
+  (ordersByDate[order.date]=ordersByDate[order.date]||[]).push(order);LS.set('ms_orders',ordersByDate);
+  $('itemRows').innerHTML='';addItemRow();['cashAmount','upiAmount','oldDuePaid'].forEach(id=>$(id).value=0);$('upiRef').value='';
+  calc();renderOrders();renderInventory();document.querySelector('[data-tab="orders"]').click();};
+
+function renderOrders(){const list=$('ordersList');list.innerHTML='';let grand=0;
+  Object.keys(ordersByDate).sort().forEach(date=>ordersByDate[date].forEach(o=>{grand+=o.total;
+    const card=document.createElement('div');card.className='bg-white rounded-2xl shadow p-4 space-y-2';
+    card.innerHTML=`<div class="flex justify-between"><div><p class="font-bold">${o.shop}</p><p class="text-sm text-slate-500">${o.place} • ${o.date}</p></div>
+      <div class="text-right"><p class="font-bold">₹${o.total.toFixed(2)}</p><p class="text-xs ${o.due>0?'text-red-600':'text-emerald-600'}">Due ₹${o.due.toFixed(2)}</p></div></div>
+      <ul class="text-sm">${o.items.map((i,ix)=>`<li class="flex justify-between"><span>${i.name} × ${i.qty}</span><span>₹${i.total.toFixed(2)} <button data-del="${o.id}|${ix}" class="text-red-500">✕</button></span></li>`).join('')}</ul>
+      <div class="text-xs text-slate-500 flex justify-between"><span>Cash ₹${o.cash.toFixed(2)} • UPI ₹${o.upi.toFixed(2)} • Old Due Paid ₹${o.oldDuePaid.toFixed(2)}</span>
+      <span class="flex gap-3"><button data-boxbill="${o.id}" class="text-blue-700 font-semibold">Download Box Bill</button><button data-delorder="${o.id}" class="text-red-600 font-semibold">Delete Bill</button></span></div>`;
+    list.appendChild(card);}));
+  list.querySelectorAll('[data-del]').forEach(b=>b.onclick=()=>{const[oid,ix]=b.dataset.del.split('|');
+    for(const d in ordersByDate){const o=ordersByDate[d].find(x=>x.id==oid);
+      if(o){const it=o.items.splice(+ix,1)[0];o.total-=it.total;o.itemsTotal=o.total;o.subtotal=o.total+(Number(o.oldDue)||Number(o.oldDuePaid)||0);o.due=Math.max(0,o.subtotal-o.cash-o.upi);
+        if(!o.items.length)ordersByDate[d]=ordersByDate[d].filter(x=>x.id!=oid);break;}}
+    LS.set('ms_orders',ordersByDate);renderOrders();renderInventory();});
+  list.querySelectorAll('[data-boxbill]').forEach(b=>b.onclick=()=>{const o=findOrder(b.dataset.boxbill);if(o)downloadTxt('bill-'+o.date+'-'+safeFile(o.shop)+'.html',buildBoxBill(o),'text/html');});
+  list.querySelectorAll('[data-delorder]').forEach(b=>b.onclick=()=>{for(const d in ordersByDate)ordersByDate[d]=ordersByDate[d].filter(x=>x.id!=b.dataset.delorder);
+    LS.set('ms_orders',ordersByDate);renderOrders();renderInventory();});
+  $('grandTotal').textContent='₹'+grand.toFixed(2);}
+
+function findOrder(id){for(const d of Object.keys(ordersByDate)){const o=ordersByDate[d].find(x=>String(x.id)===String(id));if(o)return o;}return null;}
+function safeFile(s){return String(s||'shop').replace(/[^a-z0-9_-]+/gi,'-');}
+function esc(s){return String(s??'').replace(/[&<>\"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[c]));}
+function buildBoxBill(o){const rows=o.items.map(i=>`<tr><td>${esc(i.name)}${i.quality?`<small>Quality: ${esc(i.quality)}</small>`:''}</td><td>${i.qty}</td><td>₹${Number(i.price).toFixed(2)}</td><td>₹${Number(i.total).toFixed(2)}</td></tr>`).join('');const paid=(Number(o.cash)||0)+(Number(o.upi)||0);return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Bill - ${esc(o.shop)}</title><style>*{box-sizing:border-box}body{font-family:Arial,sans-serif;background:#fff7f0;color:#202938;margin:0;padding:24px}.bill{max-width:1000px;margin:0 auto;background:white;padding:24px;border:1px solid #f1d7c7;box-shadow:0 3px 15px #00000010}.head{display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;border-bottom:2px solid #e9c7b5;padding-bottom:16px;margin-bottom:22px}.muted{color:#64748b;font-size:14px}table{width:100%;border-collapse:collapse;margin:12px 0 24px}th{color:#a63c1c;text-align:left;border-top:2px solid #e6b9a5;border-bottom:2px solid #e6b9a5;padding:12px 8px}td{padding:13px 8px;border-bottom:1px solid #f0d7c8}td:nth-child(2),th:nth-child(2){text-align:center}td:nth-child(3),td:nth-child(4),th:nth-child(3),th:nth-child(4){text-align:right}small{display:block;color:#64748b;margin-top:4px}.total{background:#bd3d0c;color:white;font-size:25px;font-weight:bold;padding:14px 12px;display:flex;justify-content:space-between;margin-top:24px}.payments{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;background:#fff7f0;padding:14px;margin-top:14px}.print{background:#1d4ed8;color:white;border:0;padding:10px 16px;border-radius:8px;margin-bottom:16px}@media print{body{background:white;padding:0}.bill{box-shadow:none;border:0}.print{display:none}}</style></head><body><div class="bill"><button class="print" onclick="window.print()">Print / Save as PDF</button><div class="head"><div><h1> BILL</h1><h2>${esc(o.shop)}</h2><div class="muted">${esc(o.place)}</div></div><div><b>Bill Date:</b> ${esc(o.date)}<br><span class="muted">Bill No: ${esc(o.id)}</span></div></div><table><thead><tr><th>Description</th><th>Qty</th><th>Rate</th><th>Amount</th></tr></thead><tbody>${rows}</tbody></table><div class="total"><span>TOTAL</span><span>₹${Number(o.total).toFixed(2)}</span></div><div class="payments"><span>Cash Paid: ₹${Number(o.cash||0).toFixed(2)}</span><span>UPI Paid: ₹${Number(o.upi||0).toFixed(2)}</span><span>Present Due: ₹${Number(o.due||0).toFixed(2)}</span><span>Old Due Paid: ₹${Number(o.oldDuePaid||0).toFixed(2)}</span></div>${o.upiRef?`<p class="muted">UPI Reference: ${esc(o.upiRef)}</p>`:''}<p class="muted" style="text-align:center;margin-top:30px">Thank you!</p></div></body></html>`;}
+$('exportBoxBtn').onclick=()=>{const all=Object.keys(ordersByDate).sort().flatMap(d=>ordersByDate[d]);if(!all.length){alert('Save a bill first.');return;}if(all.length===1){const o=all[0];downloadTxt('bill-'+o.date+'-'+safeFile(o.shop)+'.html',buildBoxBill(o),'text/html');}else{const choice=prompt('Enter the bill number to download:\n'+all.map((o,i)=>`${i+1}. ${o.shop} — ${o.date} — ₹${o.total.toFixed(2)}`).join('\n'));const o=all[Number(choice)-1];if(o)downloadTxt('bill-'+o.date+'-'+safeFile(o.shop)+'.html',buildBoxBill(o),'text/html');}};
+function buildTxt(){
+  let out='Location Name, Shop Name, Item Name, Old Due, Present Due, Quantity, Paid\n';
+  for(const date of Object.keys(ordersByDate).sort()){
+    ordersByDate[date].forEach(o=>{
+      const paid=(o.cash||0)+(o.upi||0);
+      o.items.forEach(i=>{
+        out+=`${o.place}, ${o.shop}, ${i.name}, ${Math.round(o.oldDuePaid)}, ${Math.round(o.due)}, ${i.qty}, ${Math.round(paid)}\n`;
+      });
+    });
+  }
+  return out;
+}
+$('exportTxtBtn').onclick=()=>{$('exportSummary').textContent=buildTxt();$('exportModal').classList.remove('hidden');};
+$('exportClose').onclick=()=>$('exportModal').classList.add('hidden');
+$('exportConfirm').onclick=()=>{downloadTxt('shop-bills-'+new Date().toISOString().slice(0,10)+'.txt',buildTxt());$('exportModal').classList.add('hidden');};
+function downloadTxt(name,text,type='text/plain'){const blob=new Blob([text],{type});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;a.click();}
+
+$('addInvBtn').onclick=()=>{const item=$('invItem').value.trim(),quality=$('invQuality').value.trim(),qty=+$('invQty').value||0;
+  if(!item||qty<=0){alert('Enter item and quantity.');return;}
+  inventory.push({item,quality,qty,sold:0,date:$('invDate').value||new Date().toISOString().slice(0,10)});LS.set('ms_inventory',inventory);$('invItem').value='';$('invQuality').value='';$('invQty').value='';renderInventory();};
+$('invDate').value=new Date().toISOString().slice(0,10);$('saveStockBtn').onclick=()=>{LS.set('ms_inventory',inventory);renderInventory();alert('Stock saved for '+$('invDate').value);};$('invDate').onchange=renderInventory;
+function syncInventorySold(){
+  inventory.forEach(v=>v.sold=0);
+  Object.values(ordersByDate).flat().forEach(o=>(o.items||[]).forEach(i=>{
+    const v=inventory.find(v=>v.item.toLowerCase()===String(i.name).toLowerCase()&&v.quality===(i.quality||''));
+    if(v)v.sold+=Number(i.qty)||0;
+  }));
+  LS.set('ms_inventory',inventory);
+}
+function renderInventory(){syncInventorySold();const visible=inventory.filter(v=>!v.date||v.date===($('invDate').value||new Date().toISOString().slice(0,10)));const total=visible.reduce((s,v)=>s+v.qty,0),sold=visible.reduce((s,v)=>s+(v.sold||0),0);
+  $('invStats').innerHTML=[['Total Items',total],['Sold',sold],['Remaining',total-sold]].map(([l,v])=>`<div class="bg-white rounded-xl shadow p-4 text-center"><p class="text-sm text-slate-500">${l}</p><p class="text-2xl font-bold">${v}</p></div>`).join('');
+  $('invList').innerHTML=visible.map((v)=>{const i=inventory.indexOf(v);return `<div class="bg-white rounded-xl shadow p-3 flex justify-between items-center"><div><p class="font-semibold">${v.item} <span class="text-sm text-slate-500">(${v.quality||'-'})</span></p><p class="text-sm">Initial ${v.qty} • Sold ${v.sold||0} • Remaining <b>${v.qty-(v.sold||0)}</b></p></div><button data-invd="${i}" class="text-red-600 font-bold">✕</button></div>`}).join('')||'<p class="text-sm text-slate-500">No stock added for this date.</p>';
+  $('invList').querySelectorAll('[data-invd]').forEach(b=>b.onclick=()=>{inventory.splice(+b.dataset.invd,1);LS.set('ms_inventory',inventory);renderInventory();});}
+
+let map=null,routeLine=null;
+if(window.L){
+  map=L.map('map').setView([17.385,78.4867],13);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OpenStreetMap'}).addTo(map);
+  routeLine=L.polyline([],{color:'#2563eb',weight:6,opacity:.9}).addTo(map);
+}else{$('map').innerHTML='<p class="p-4 text-sm">Map library could not load. Connect to the internet and reload this page.</p>';}
+let startMarker=null,endMarker=null,watchId=null,waypoints=[],tripStart=null,accumulated=0,pauseTime=null;
+function renderTripHistory(){const el=$('tripHistory');if(!el)return;el.innerHTML=trips.slice().reverse().map(t=>`<div class="bg-white rounded-xl p-3 shadow flex flex-wrap justify-between gap-2"><div><b>${new Date(t.date).toLocaleString()}</b><p class="text-sm text-slate-600">${Number(t.km||0).toFixed(2)} km • ${fmtDur(t.sec||0)} • ${t.billCount||0} bills • ₹${Number(t.totalAmount||0).toFixed(2)}</p></div><button class="bg-blue-600 text-white rounded-lg px-3 py-2" data-tripmap="${t.id}">Map</button></div>`).join('')||'<p class="text-sm text-slate-500">No completed trips yet.</p>';el.querySelectorAll('[data-tripmap]').forEach(b=>b.onclick=()=>{const t=trips.find(x=>String(x.id)===b.dataset.tripmap);if(t&&routeLine&&map){routeLine.setLatLngs(t.points||[]);if(t.points&&t.points.length)map.fitBounds(routeLine.getBounds(),{padding:[20,20]});document.querySelector('[data-tab="travel"]').click();}});}
+function fmtDur(s){s=Math.max(0,Math.floor(s));return `${Math.floor(s/3600)}h ${Math.floor(s%3600/60)}m`;}
+function tripStats(){let km=0;for(let i=1;i<waypoints.length;i++)km+=haversine(...waypoints[i-1],...waypoints[i])/1000;
+  const elapsedMs=accumulated+(tripStart?((pauseTime||Date.now())-tripStart):0),sec=elapsedMs/1000,avg=sec>0?km/(sec/3600):0;
+  $('tripInfo').innerHTML=[['Distance',km.toFixed(2)+' km'],['Time',fmtDur(sec)],['Avg Speed',avg.toFixed(2)+' km/h']].map(([l,v])=>`<div class="bg-slate-100 rounded-xl p-3"><p class="text-xs text-slate-500">${l}</p><p class="font-bold">${v}</p></div>`).join('');
+  return{km,sec,avg};}
+$('startTrip').onclick=()=>{if(watchId)return;if(!navigator.geolocation){alert('GPS is not available in this browser.');return;}if(!map||!routeLine){alert('Map library could not load. Connect to the internet and reload.');return;}
+  if(!tripStart){waypoints=[];accumulated=0;pauseTime=null;routeLine.setLatLngs([]);if(startMarker)map.removeLayer(startMarker);if(endMarker)map.removeLayer(endMarker);startMarker=endMarker=null;}
+  tripStart=Date.now();pauseTime=null;
+  watchId=navigator.geolocation.watchPosition(p=>{const c=[p.coords.latitude,p.coords.longitude];
+    if(!waypoints.length||haversine(...waypoints[waypoints.length-1],...c)>5){waypoints.push(c);routeLine.setLatLngs(waypoints);
+      if(!startMarker){startMarker=L.marker(c).addTo(map).bindPopup('Start');map.setView(c,15);}
+      if(endMarker)map.removeLayer(endMarker);endMarker=L.marker(c).addTo(map).bindPopup('Current position');map.panTo(c);}
+    tripStats();},e=>alert('GPS error: '+e.message),{enableHighAccuracy:true,maximumAge:2000});};
+$('pauseTrip').onclick=()=>{if(watchId){navigator.geolocation.clearWatch(watchId);watchId=null;accumulated+=Date.now()-tripStart;tripStart=null;pauseTime=Date.now();tripStats();}};
+$('completeTrip').onclick=()=>{if(watchId){navigator.geolocation.clearWatch(watchId);watchId=null;accumulated+=Date.now()-tripStart;tripStart=null;}pauseTime=null;
+  if(!waypoints.length){alert('No route recorded.');return;}
+  const{km,sec,avg}=tripStats();trips.push({id:Date.now(),date:new Date().toISOString(),points:waypoints.slice(),km,sec,avg,billCount:0,totalAmount:0});LS.set('ms_trips',trips);renderTripHistory();$('tripStatus').textContent='Trip completed.';
+  alert(`Trip completed: ${km.toFixed(2)} km, ${fmtDur(sec)}, avg ${avg.toFixed(2)} km/h`);};
+$('clearTrip').onclick=()=>{if(watchId){navigator.geolocation.clearWatch(watchId);watchId=null;}waypoints=[];if(routeLine)routeLine.setLatLngs([]);if(startMarker&&map)map.removeLayer(startMarker);if(endMarker&&map)map.removeLayer(endMarker);startMarker=endMarker=null;tripStart=null;accumulated=0;pauseTime=null;$('tripInfo').innerHTML='';};
+$('tripTxtBtn').onclick=()=>{const{km,sec,avg}=tripStats();let t='TRAVEL TRIP SUMMARY\n===================\nDate: '+new Date().toLocaleString()+'\n';
+  t+=`Waypoints: ${waypoints.length}\nDistance: ${km.toFixed(2)} km\nElapsed: ${fmtDur(sec)}\nAverage Speed: ${avg.toFixed(2)} km/h\n\nROUTE\n-----\n`;
+  waypoints.forEach((w,i)=>t+=`${i+1}. ${w[0].toFixed(6)}, ${w[1].toFixed(6)}\n`);downloadTxt('trip-'+Date.now()+'.txt',t);};
+
+$('importShopsBtn').onclick=()=>{const text=$('shopPaste').value.trim();
+  if(text)text.split('\n').forEach(line=>{const[name,lat,lng,place]=line.split(',').map(x=>x.trim());
+    if(name&&!isNaN(+lat)&&!isNaN(+lng))shops.push({name,latitude:+lat,longitude:+lng,place:place||''});});
+  LS.set('ms_shops',shops);$('shopPaste').value='';renderShops();renderShopDropdown();alert('Shops imported.');};
+$('shopFile').onchange=e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();
+  r.onload=()=>{try{if(f.name.endsWith('.json'))JSON.parse(r.result).forEach(s=>shops.push({name:s['shop name']||s.name,latitude:+s.latitude,longitude:+s.longitude,place:s.place||''}));
+    else r.result.split('\n').slice(1).forEach(line=>{const[name,lat,lng,place]=line.split(',').map(x=>x.trim());
+      if(name&&!isNaN(+lat)&&!isNaN(+lng))shops.push({name,latitude:+lat,longitude:+lng,place:place||''});});
+    LS.set('ms_shops',shops);renderShops();renderShopDropdown();alert('Imported.');}catch(err){alert('Invalid file.');}};
+  r.readAsText(f);};
+function renderShops(){$('shopDbList').innerHTML=shops.map((s,i)=>`<div class="flex justify-between"><span>${s.name} — ${s.place}</span><button data-sd="${i}" class="text-red-600">✕</button></div>`).join('')||'<p class="text-slate-500">No shops saved.</p>';
+  $('shopDbList').querySelectorAll('[data-sd]').forEach(b=>b.onclick=()=>{shops.splice(+b.dataset.sd,1);LS.set('ms_shops',shops);renderShops();renderShopDropdown();});}
+
+function renderAll(){addItemRow();calc();renderOrders();renderInventory();renderShops();renderShopDropdown();tripStats();renderTripHistory();}
+$('billDate').value=new Date().toISOString().slice(0,10);
+</script>
+</body>
+</html>
